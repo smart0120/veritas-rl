@@ -1,16 +1,33 @@
 """
-Add reasoning to dataset using OpenAI.
+Add reasoning to dataset using DeepSeek API with deepseek-reasoner model.
 
 This script reads a dataset JSONL file and generates reasoning for each sample
-using OpenAI. The reasoning is combined with the original answer and placed
-in the "answer" field. The answer field contains: reasoning + final answer.
+using DeepSeek API with deepseek-reasoner model. The reasoning is combined with 
+the original answer and placed in the "answer" field. The answer field contains: 
+reasoning + final answer.
+
+Rate Limit:
+DeepSeek API does NOT constrain user's rate limit. We will try our best to serve 
+every request.
+
+However, when servers are under high traffic pressure, requests may take time to 
+receive a response. During this period:
+- HTTP request remains connected
+- Non-streaming requests: Continuously return empty lines
+- Streaming requests: Continuously return SSE keep-alive comments (: keep-alive)
+
+The OpenAI SDK automatically handles these empty lines and keep-alive comments 
+correctly. They do not affect JSON body parsing.
+
+If the request has not started inference after 10 minutes, the server will close 
+the connection. No retry logic is implemented - requests wait up to the timeout 
+for response.
 
 Usage:
     python data_processing/add_reasoning.py \
       --input data_processing/dataset/swe-synth.jsonl \
       --output data_processing/dataset/swe-synth-with-reasoning.jsonl \
-      --model gpt-4o-mini \
-      --max-retries 3
+      --timeout 600
 """
 
 import argparse
@@ -18,7 +35,6 @@ import asyncio
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -54,11 +70,12 @@ if load_dotenv is not None:
 from validation import validate_file_path, validate_directory_path
 
 # Constants
-DEFAULT_MODEL = "gpt-4o-mini"
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_TIMEOUT = 60
+MODEL = "deepseek-reasoner"  # Always use deepseek-reasoner model
+# Default timeout: 10 minutes (600 seconds)
+# DeepSeek will close connection if inference hasn't started after 10 minutes
+DEFAULT_TIMEOUT = 600
 PROGRESS_INTERVAL = 10
-RATE_LIMIT_RETRY_DELAY = 5  # seconds
+DEEPSEEK_API_BASE = "https://api.deepseek.com"
 
 
 def detect_language(prompt: str, metadata: Optional[Dict[str, Any]] = None) -> str:
@@ -93,9 +110,9 @@ def detect_language(prompt: str, metadata: Optional[Dict[str, Any]] = None) -> s
     return "english"
 
 
-def get_openai_client() -> AsyncOpenAI:
-    """Get OpenAI client from environment variable."""
-    api_key = os.getenv("OPENAI_API_KEY")
+def get_deepseek_client() -> AsyncOpenAI:
+    """Get DeepSeek API client from environment variable."""
+    api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         # Check if .env file exists and provide helpful message
         project_root = Path(__file__).parent.parent
@@ -103,46 +120,54 @@ def get_openai_client() -> AsyncOpenAI:
         env_hint = ""
         if env_file.exists():
             env_hint = (
-                f"\nNote: .env file exists at {env_file}, but OPENAI_API_KEY was not loaded. "
+                f"\nNote: .env file exists at {env_file}, but DEEPSEEK_API_KEY was not loaded. "
                 "Make sure to:\n"
                 "  1. Activate the virtual environment: source .venv/bin/activate\n"
                 "  2. Or install python-dotenv: pip install python-dotenv\n"
-                "  3. Or set the environment variable: export OPENAI_API_KEY=your_key_here"
+                "  3. Or set the environment variable: export DEEPSEEK_API_KEY=your_key_here"
             )
         raise ValueError(
-            "OPENAI_API_KEY environment variable is not set. "
-            "Set it with: export OPENAI_API_KEY=your_key_here"
+            "DEEPSEEK_API_KEY environment variable is not set. "
+            "Set it with: export DEEPSEEK_API_KEY=your_key_here"
             + env_hint
         )
-    return AsyncOpenAI(api_key=api_key)
+    # DeepSeek uses OpenAI-compatible API with custom base URL
+    return AsyncOpenAI(api_key=api_key, base_url=DEEPSEEK_API_BASE)
 
 
 async def generate_reasoning(
     client: AsyncOpenAI,
     prompt: str,
     original_answer: str,
-    model: str,
-    max_retries: int = DEFAULT_MAX_RETRIES,
     timeout: int = DEFAULT_TIMEOUT,
     language: str = "english",
 ) -> str:
     """
-    Generate reasoning using OpenAI that explains how to arrive at the answer.
+    Generate reasoning using DeepSeek API with deepseek-reasoner model.
     The reasoning will be generated in the same language as the problem.
     
+    Rate Limit & Keep-Alive:
+        DeepSeek API does NOT enforce rate limits. During high traffic, the HTTP
+        connection remains open and may receive:
+        - Non-streaming: Empty lines continuously
+        - Streaming: SSE keep-alive comments (: keep-alive)
+        
+        The OpenAI SDK handles these automatically - they don't affect JSON parsing.
+        No retry logic is needed as DeepSeek serves all requests.
+        
+        If inference hasn't started after 10 minutes, the server closes the connection.
+    
     Args:
-        client: OpenAI async client
+        client: DeepSeek API async client (OpenAI-compatible)
         prompt: The problem/prompt text
         original_answer: The original answer (final solution)
-        model: OpenAI model to use
-        max_retries: Maximum number of retries on failure
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds (default: 600s = 10 minutes)
         language: Language of the prompt ("chinese" or "english")
     
     Returns:
         str: Generated reasoning text in the same language as the problem
     """
-    # Generate prompts in the appropriate language
+    # Generate prompts in the appropriate language with JSON format instructions
     if language == "chinese":
         system_prompt = """你是一个有用的助手，能够为解决问题提供逐步的推理过程。
 你的任务是提供清晰、逻辑严密的推理，引导出给定的答案。
@@ -183,92 +208,64 @@ Final Answer:
 
 Please provide step-by-step reasoning that explains how to arrive at this answer. 
 The reasoning should be clear and logical, showing the thought process step by step.
-End your reasoning with a clear statement of the final answer."""
+End your reasoning with a clear statement of the final answer.
 
-    # Some models don't support custom temperature (e.g., gpt-5)
-    # Try with temperature first, fall back to default if it fails
-    use_temperature = True
-    temperature_value = 0.3
-    
-    for attempt in range(max_retries):
+Please output your response in JSON format as follows:
+{{
+    "answer": "Your complete reasoning process and final answer"
+}}"""
+
+    # Make single request - no retry logic needed
+    # DeepSeek API behavior during high traffic:
+    # - Non-streaming: Continuously returns empty lines (handled by OpenAI SDK)
+    # - Streaming: Continuously returns SSE keep-alive comments (: keep-alive)
+    # - Connection stays open until inference starts or 10 minutes timeout
+    # - OpenAI SDK automatically handles empty lines/keep-alive, doesn't affect JSON parsing
+    try:
+        request_params = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.3,
+            "response_format": {"type": "json_object"},
+        }
+        
+        response = await asyncio.wait_for(
+            client.chat.completions.create(**request_params),
+            timeout=timeout,
+        )
+        
+        content = response.choices[0].message.content
+        
+        if not content:
+            raise ValueError("Empty response content from API")
+        
         try:
-            request_params = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            }
-            
-            # Only add temperature if it's supported (skip on retry if we got temperature error)
-            if use_temperature:
-                request_params["temperature"] = temperature_value
-            
-            response = await asyncio.wait_for(
-                client.chat.completions.create(**request_params),
-                timeout=timeout,
+            response_json = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse JSON response: {e}. Content: {content[:200]}")
+        
+        # Extract answer field from JSON response
+        answer_content = response_json.get("answer", "").strip()
+        
+        if not answer_content:
+            raise ValueError(
+                f"Empty 'answer' field in JSON response. "
+                f"Available keys: {list(response_json.keys())}"
             )
-            
-            reasoning = response.choices[0].message.content.strip()
-            if not reasoning:
-                raise ValueError("Empty reasoning generated")
-            
-            return reasoning
-            
-        except asyncio.TimeoutError:
-            if attempt < max_retries - 1:
-                print(
-                    f"Timeout on attempt {attempt + 1}/{max_retries}, retrying...",
-                    file=sys.stderr
-                )
-                await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
-                continue
-            raise RuntimeError(f"Request timed out after {timeout}s")
-            
-        except Exception as e:
-            error_str = str(e).lower()
-            error_msg = str(e)
-            
-            # Check for temperature unsupported error
-            if "temperature" in error_str and ("unsupported" in error_str or "does not support" in error_str):
-                if use_temperature:
-                    # Retry without temperature parameter
-                    use_temperature = False
-                    print(
-                        f"Model {model} doesn't support custom temperature, "
-                        f"retrying without temperature parameter...",
-                        file=sys.stderr
-                    )
-                    continue
-                else:
-                    # Already tried without temperature, this is a different error
-                    pass
-            
-            # Check for rate limit errors
-            if "rate limit" in error_str or "429" in error_str:
-                if attempt < max_retries - 1:
-                    wait_time = RATE_LIMIT_RETRY_DELAY * (attempt + 1)
-                    print(
-                        f"Rate limit hit on attempt {attempt + 1}/{max_retries}, "
-                        f"waiting {wait_time}s before retry...",
-                        file=sys.stderr
-                    )
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise RuntimeError(f"Rate limit exceeded after {max_retries} attempts")
-            
-            # For other errors, retry once more
-            if attempt < max_retries - 1:
-                print(
-                    f"Error on attempt {attempt + 1}/{max_retries}: {e}, retrying...",
-                    file=sys.stderr
-                )
-                await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
-                continue
-            
-            raise RuntimeError(f"Failed to generate reasoning after {max_retries} attempts: {e}") from e
-    
-    raise RuntimeError(f"Failed to generate reasoning after {max_retries} attempts")
+        
+        return answer_content
+        
+    except asyncio.TimeoutError:
+        # DeepSeek closes connection if inference hasn't started after 10 minutes
+        raise RuntimeError(
+            f"Request timed out after {timeout}s. "
+            f"DeepSeek closes connection if inference hasn't started after 10 minutes."
+        )
+    except Exception as e:
+        raise RuntimeError(f"Failed to generate reasoning: {e}") from e
 
 
 def combine_reasoning_and_answer(reasoning: str, original_answer: str, language: str = "english") -> str:
@@ -306,18 +303,14 @@ def combine_reasoning_and_answer(reasoning: str, original_answer: str, language:
 async def process_sample(
     client: AsyncOpenAI,
     sample: Dict[str, Any],
-    model: str,
-    max_retries: int,
     timeout: int,
 ) -> Dict[str, Any]:
     """
     Process a single sample to add reasoning.
     
     Args:
-        client: OpenAI async client
+        client: DeepSeek API async client (OpenAI-compatible)
         sample: Sample dictionary with prompt and answer
-        model: OpenAI model to use
-        max_retries: Maximum retries
         timeout: Request timeout
     
     Returns:
@@ -337,7 +330,7 @@ async def process_sample(
     
     # Generate reasoning in the same language as the prompt
     reasoning = await generate_reasoning(
-        client, prompt, original_answer, model, max_retries, timeout, language
+        client, prompt, original_answer, timeout, language
     )
     
     # Combine reasoning and answer - this becomes the new answer field
@@ -353,8 +346,6 @@ async def process_sample(
 async def process_dataset(
     input_path: Path,
     output_path: Path,
-    model: str,
-    max_retries: int,
     timeout: int,
     max_concurrent: int = 5,
 ) -> None:
@@ -364,12 +355,10 @@ async def process_dataset(
     Args:
         input_path: Path to input JSONL file
         output_path: Path to output JSONL file
-        model: OpenAI model to use
-        max_retries: Maximum retries per sample
         timeout: Request timeout
         max_concurrent: Maximum concurrent requests
     """
-    client = get_openai_client()
+    client = get_deepseek_client()
     
     # Load samples
     samples = []
@@ -392,7 +381,7 @@ async def process_dataset(
     if not samples:
         raise ValueError(f"No valid samples found in {input_path}")
     
-    print(f"Processing {len(samples)} samples with model {model}...")
+    print(f"Processing {len(samples)} samples with model {MODEL}...")
     
     # Process samples with concurrency control
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -403,7 +392,7 @@ async def process_dataset(
         nonlocal processed, errors
         async with semaphore:
             try:
-                result = await process_sample(client, sample, model, max_retries, timeout)
+                result = await process_sample(client, sample, timeout)
                 processed += 1
                 if processed % PROGRESS_INTERVAL == 0:
                     print(
@@ -441,7 +430,7 @@ async def process_dataset(
 async def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Add reasoning to dataset using OpenAI"
+        description="Add reasoning to dataset using DeepSeek API with thinking mode"
     )
     parser.add_argument(
         "--input",
@@ -456,22 +445,12 @@ async def main() -> None:
         help="Output JSONL file path"
     )
     parser.add_argument(
-        "--model",
-        type=str,
-        default=DEFAULT_MODEL,
-        help=f"OpenAI model to use (default: {DEFAULT_MODEL})"
-    )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=DEFAULT_MAX_RETRIES,
-        help=f"Maximum retries per sample (default: {DEFAULT_MAX_RETRIES})"
-    )
-    parser.add_argument(
         "--timeout",
         type=int,
         default=DEFAULT_TIMEOUT,
-        help=f"Request timeout in seconds (default: {DEFAULT_TIMEOUT})"
+        help=f"Request timeout in seconds (default: {DEFAULT_TIMEOUT}s = 10 minutes). "
+             f"DeepSeek closes connection if inference hasn't started after 10 minutes. "
+             f"Keep-alive (empty lines/SSE comments) during high traffic is handled automatically by SDK."
     )
     parser.add_argument(
         "--max-concurrent",
@@ -489,8 +468,6 @@ async def main() -> None:
     output_path = Path(args.output)
     validate_directory_path(output_path.parent, must_exist=False, create=True)
     
-    if args.max_retries < 1:
-        raise ValueError("--max-retries must be at least 1")
     if args.timeout < 1:
         raise ValueError("--timeout must be at least 1")
     if args.max_concurrent < 1:
@@ -500,8 +477,6 @@ async def main() -> None:
     await process_dataset(
         input_path,
         output_path,
-        args.model,
-        args.max_retries,
         args.timeout,
         args.max_concurrent,
     )
