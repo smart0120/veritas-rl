@@ -4,18 +4,21 @@ Generate dataset (problems + answers) from environments.
 This script can generate datasets from both lgc-v2 and trace environments,
 including both the problem (prompt) and the answer/ground truth.
 
+Files are automatically saved in chunks of 1000 records to:
+    data_processing/{env_name}/{start_num}-{end_num}.jsonl
+
 Usage:
     # Generate LGC-V2 dataset
-    python data_processing/generate_dataset.py --env lgc-v2 --output data_processing/dataset/lgc-v2.jsonl --num-samples 1000
+    python data_processing/generate_dataset.py --env lgc-v2 --num-samples 1000
 
     # Generate with higher concurrency for faster generation
-    python data_processing/generate_dataset.py --env lgc-v2 --output data_processing/dataset/lgc-v2.jsonl --num-samples 1000 --concurrency 8
+    python data_processing/generate_dataset.py --env lgc-v2 --num-samples 1000 --concurrency 8
 
     # Generate Trace dataset
-    python data_processing/generate_dataset.py --env trace --output data_processing/dataset/trace.jsonl --num-samples 1000
+    python data_processing/generate_dataset.py --env trace --num-samples 1000
 
     # Generate specific task types from LGC-V2
-    python data_processing/generate_dataset.py --env lgc-v2 --task-types dyck_language game_of_24 --output data_processing/dataset/mixed.jsonl --num-samples 500
+    python data_processing/generate_dataset.py --env lgc-v2 --task-types dyck_language game_of_24 --num-samples 500
 """
 
 import argparse
@@ -44,6 +47,7 @@ from validation import (
 MAX_RETRIES = 5
 PROGRESS_INTERVAL = 100
 DEFAULT_CONCURRENCY = 4  # Default number of concurrent generations
+CHUNK_SIZE = 1000  # Number of samples per file
 
 
 @dataclass
@@ -531,12 +535,6 @@ async def main() -> None:
         help="Environment to generate from"
     )
     parser.add_argument(
-        "--output",
-        type=str,
-        required=True,
-        help="Output JSONL file path"
-    )
-    parser.add_argument(
         "--num-samples",
         type=int,
         required=True,
@@ -603,12 +601,6 @@ async def main() -> None:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in --adapter-config: {e}") from e
     
-    # Validate output path
-    output_path = Path(args.output)
-    validate_directory_path(output_path.parent, must_exist=False, create=True)
-    if output_path.exists():
-        validate_file_path(output_path, must_exist=True)
-    
     # Create configuration
     seed = args.seed if args.seed is not None else args.start_task_id
     config = GenerationConfig(
@@ -639,46 +631,103 @@ async def main() -> None:
                 "(wraps around at dataset_size derived from adapter)"
             )
     
-    # Generate and write samples
+    # Generate and write samples in chunks
     samples_generated = 0
     errors_count = 0
     max_errors = config.num_samples // 10  # Allow up to 10% errors
     
+    # Create output directory: data_processing/{env_name}/
+    output_dir = Path(__file__).parent / config.env
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    current_file = None
+    current_file_samples = 0
+    chunk_start_task_id = None  # Track first task_id in current chunk
+    chunk_end_task_id = None    # Track last task_id in current chunk
+    generated_files = []
+    
+    def close_current_file():
+        """Close current file and rename with correct task_id range."""
+        nonlocal current_file, chunk_start_task_id, chunk_end_task_id, generated_files
+        if current_file is not None:
+            current_file.close()
+            if chunk_start_task_id is not None and chunk_end_task_id is not None:
+                # Create correct filename with actual task_id range
+                correct_path = output_dir / f"{chunk_start_task_id}-{chunk_end_task_id}.jsonl"
+                # Find the temporary file we created
+                if generated_files:
+                    temp_path, _ = generated_files[-1]
+                    if temp_path != correct_path and temp_path.exists():
+                        temp_path.rename(correct_path)
+                        generated_files[-1] = (correct_path, chunk_start_task_id)
+            current_file = None
+    
     try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            async for sample in _generate_samples(config):
-                try:
-                    f.write(json.dumps(sample, ensure_ascii=False) + "\n")
-                    f.flush()
-                    samples_generated += 1
-                    if samples_generated % PROGRESS_INTERVAL == 0:
-                        print(
-                            f"Generated {samples_generated}/{config.num_samples} samples...",
-                            file=sys.stderr
-                        )
-                except (OSError, IOError) as e:
-                    errors_count += 1
+        async for sample in _generate_samples(config):
+            try:
+                # Get task_id from sample
+                task_id = sample.get("task_id", samples_generated)
+                
+                # Check if we need to start a new file (every 1000 samples)
+                if current_file is None or current_file_samples >= CHUNK_SIZE:
+                    # Close previous file if open
+                    close_current_file()
+                    
+                    # Start new chunk - use current task_id as start
+                    chunk_start_task_id = task_id
+                    chunk_end_task_id = task_id
+                    current_file_samples = 0
+                    
+                    # Create temporary file path (will be renamed with correct end_id when closed)
+                    temp_path = output_dir / f"{chunk_start_task_id}-temp.jsonl"
+                    current_file = open(temp_path, "w", encoding="utf-8")
+                    generated_files.append((temp_path, chunk_start_task_id))
+                    print(f"Starting new chunk (task_id {chunk_start_task_id})...", file=sys.stderr)
+                
+                # Write sample to current file
+                current_file.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                current_file.flush()
+                samples_generated += 1
+                current_file_samples += 1
+                chunk_end_task_id = task_id  # Update end task_id
+                
+                if samples_generated % PROGRESS_INTERVAL == 0:
                     print(
-                        f"Error writing sample {samples_generated + 1}: {e}",
+                        f"Generated {samples_generated}/{config.num_samples} samples...",
                         file=sys.stderr
                     )
-                    if errors_count > max_errors:
-                        raise RuntimeError(
-                            f"Too many write errors ({errors_count}). "
-                            f"Stopping generation. Check disk space and permissions."
-                        ) from e
+                    
+            except (OSError, IOError) as e:
+                errors_count += 1
+                print(
+                    f"Error writing sample {samples_generated + 1}: {e}",
+                    file=sys.stderr
+                )
+                if errors_count > max_errors:
+                    raise RuntimeError(
+                        f"Too many write errors ({errors_count}). "
+                        f"Stopping generation. Check disk space and permissions."
+                    ) from e
+        
+        # Close the last file and rename it with correct end task_id
+        close_current_file()
+            
     except KeyboardInterrupt:
         print(f"\nInterrupted. Generated {samples_generated} samples.", file=sys.stderr)
+        close_current_file()
         if samples_generated > 0:
-            print(f"Partial dataset saved to {output_path}", file=sys.stderr)
+            print(f"Partial dataset saved to {len(generated_files)} file(s) in {output_dir}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
+        close_current_file()
         print(f"Error during generation: {e}", file=sys.stderr)
         if samples_generated > 0:
-            print(f"Partial dataset ({samples_generated} samples) saved to {output_path}", file=sys.stderr)
+            print(f"Partial dataset ({samples_generated} samples) saved to {len(generated_files)} file(s) in {output_dir}", file=sys.stderr)
         raise
     
-    print(f"✓ Generated {samples_generated} samples to {output_path}")
+    print(f"✓ Generated {samples_generated} samples to {len(generated_files)} file(s) in {output_dir}")
+    for file_path, _ in generated_files:
+        print(f"  - {file_path}")
 
 
 if __name__ == "__main__":
