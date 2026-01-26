@@ -1,5 +1,5 @@
 """
-Convert JSON/JSONL files into VERL-compatible parquet files.
+Convert JSON files from results folder into parquet files.
 
 This script targets VERL's RLHF/RL dataset format (see `verl/verl/utils/dataset/README.md`).
 
@@ -365,26 +365,18 @@ def _normalize_row(
 
 def main(argv: Optional[List[str]] = None) -> None:
     """Main entry point for parquet conversion."""
-    p = argparse.ArgumentParser(description="Convert JSON/JSONL -> VERL parquet")
-    p.add_argument(
-        "--input",
-        type=str,
-        default="dataset",
-        help="Input .jsonl/.json file or directory containing them "
-             "(relative to repo root by default).",
-    )
+    p = argparse.ArgumentParser(description="Convert JSON files from results folder to parquet")
     p.add_argument(
         "--out-dir",
         type=str,
         default="parquet",
-        help="Output directory for parquet files "
-             "(relative to repo root by default).",
+        help="Output directory for parquet files (default: same as results folder).",
     )
     p.add_argument(
         "--env",
         type=str,
         default="lgc-v2",
-        help="Value for extra_info.env (e.g. lgc-v2, trace)."
+        help="Environment name for normalization (e.g. lgc-v2, trace).",
     )
     p.add_argument(
         "--format",
@@ -394,139 +386,135 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Output format: rl (prompt as chat messages) or sft (prompt/response strings).",
     )
     p.add_argument(
-        "--response-field",
-        type=str,
-        default="",
-        help=(
-            "SFT only: input field name to use as response (output column 'response'). "
-            f"If omitted, we try: {', '.join(DEFAULT_RESPONSE_FIELDS)}."
-        ),
-    )
-    p.add_argument(
-        "--prompt-field",
-        type=str,
-        default="prompt",
-        help="Field name in input containing prompt/messages."
-    )
-    p.add_argument(
-        "--data-source-field",
-        type=str,
-        default="",
-        help="Optional field name in input to use as data_source "
-             "(default: data_source or task_type).",
-    )
-    p.add_argument(
         "--val-ratio",
         type=float,
-        default=0.0,
-        help="If >0, split into train/val with this ratio."
-    )
-    p.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for splitting/shuffling."
+        default=0.2,
+        help="If >0, split into train/val with this ratio (default: 0.2).",
     )
     p.add_argument(
         "--shuffle",
         action="store_true",
-        help="Shuffle before splitting."
+        help="Shuffle before splitting.",
     )
 
     args = p.parse_args(argv)
-
+    
     # Input validation
     if args.val_ratio > 0:
         validate_ratio(args.val_ratio, "--val-ratio")
-    validate_non_negative_int(args.seed, "--seed")
 
-    # Resolve paths
-    repo_root = Path(__file__).resolve().parent.parent
-    input_path = Path(args.input)
-    if not input_path.is_absolute():
-        input_path = repo_root / input_path
+    # Setup paths
+    data_processing_dir = Path(__file__).parent
+    results_dir = data_processing_dir / "results"
     
-    # Validate input path
-    if input_path.is_file():
-        validate_file_path(input_path, must_exist=True, extensions=(".json", ".jsonl"))
-    elif input_path.is_dir():
-        # Directory validation happens in _iter_input_files
-        pass
+    if not results_dir.exists():
+        raise FileNotFoundError(
+            f"Results directory not found: {results_dir}. "
+            f"Make sure to run evaluate_dataset.py first."
+        )
+    
+    if not results_dir.is_dir():
+        raise ValueError(f"Path exists but is not a directory: {results_dir}")
+
+    # Determine output directory
+    if args.out_dir:
+        out_dir = Path(args.out_dir)
+        if not out_dir.is_absolute():
+            out_dir = data_processing_dir / out_dir
     else:
-        raise FileNotFoundError(f"Input path does not exist: {input_path}")
-
-    out_dir = Path(args.out_dir)
-    if not out_dir.is_absolute():
-        out_dir = repo_root / out_dir
+        # Default: save parquet files in results folder
+        out_dir = results_dir
     
-    # Validate output directory
+    # Create output directory if it doesn't exist
     validate_directory_path(out_dir, must_exist=False, create=True)
 
-    # Read and normalize rows
-    files = _iter_input_files(input_path)
-    rows: List[Dict[str, Any]] = []
+    # Find all JSON files
+    json_files = sorted(results_dir.glob("*.json"))
     
-    for f in files:
-        reader = _read_jsonl if f.suffix.lower() == ".jsonl" else _read_json
-        try:
-            for raw in reader(f):
-                rows.append(
-                    _normalize_row(
-                        raw,
-                        env=args.env,
-                        prompt_field=args.prompt_field,
-                        data_source_field=(args.data_source_field or None),
-                        output_format=args.format,
-                        response_field=(args.response_field or None),
-                    )
-                )
-        except Exception as e:
-            raise RuntimeError(f"Error processing file {f}: {e}") from e
-
-    if not rows:
+    if not json_files:
         raise ValueError(
-            f"No valid rows found in input files. "
-            f"Check that files contain valid JSON/JSONL data."
+            f"No JSON files found in {results_dir}. "
+            f"Make sure to run evaluate_dataset.py first."
         )
-
-    # Create dataset
-    ds = datasets.Dataset.from_list(rows)
-    if args.shuffle:
-        ds = ds.shuffle(seed=args.seed)
-
-    # Split and save
-    if args.val_ratio and args.val_ratio > 0:
-        if len(ds) < 2:
-            raise ValueError(
-                f"Dataset too small ({len(ds)} rows) for train/val split. "
-                f"Need at least 2 rows."
-            )
+    
+    print(f"Found {len(json_files)} JSON file(s) to convert in {results_dir}")
+    
+    # Process each file
+    total_processed = 0
+    total_errors = 0
+    
+    for json_file in json_files:
+        # Output parquet file with same name
+        parquet_file = out_dir / f"{json_file.stem}.parquet"
         
-        split = ds.train_test_split(test_size=args.val_ratio, seed=args.seed)
-        train_ds, val_ds = split["train"], split["test"]
-        train_path = out_dir / "train.parquet"
-        val_path = out_dir / "val.parquet"
+        # Skip if output already exists
+        if parquet_file.exists():
+            print(f"Skipping {json_file.name} (parquet file already exists: {parquet_file.name})")
+            continue
+        
+        print(f"\n{'='*60}")
+        print(f"Converting: {json_file.name} -> {parquet_file.name}")
+        print(f"{'='*60}")
         
         try:
-            train_ds.to_parquet(str(train_path))
-            val_ds.to_parquet(str(val_path))
-            print(f"Wrote {len(train_ds)} train rows to {train_path}")
-            print(f"Wrote {len(val_ds)} val rows to {val_path}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to write parquet files: {e}") from e
-        finally:
-            # Clean up datasets to avoid multiprocessing cleanup issues
-            del train_ds, val_ds, split
-    else:
-        out_path = out_dir / "train.parquet"
-        try:
-            ds.to_parquet(str(out_path))
-            print(f"Wrote {len(ds)} rows to {out_path}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to write parquet file: {e}") from e
-        finally:
-            # Clean up dataset to avoid multiprocessing cleanup issues
+            # Read JSON file
+            json_data = json.loads(json_file.read_text(encoding="utf-8"))
+            
+            # Convert to list if it's a single dict
+            if isinstance(json_data, dict):
+                # For evaluation results, wrap in a list to create a single-row dataset
+                rows = [json_data]
+            elif isinstance(json_data, list):
+                rows = json_data
+            else:
+                raise ValueError(f"Expected dict or list in {json_file}, got {type(json_data)}")
+            
+            # Create dataset
+            ds = datasets.Dataset.from_list(rows)
+            
+            # Shuffle if requested
+            if args.shuffle:
+                ds = ds.shuffle(seed=42)
+            
+            # Split and save
+            if args.val_ratio and args.val_ratio > 0 and len(ds) >= 2:
+                split = ds.train_test_split(test_size=args.val_ratio, seed=42)
+                train_ds, val_ds = split["train"], split["test"]
+                train_path = out_dir / f"{json_file.stem}_train.parquet"
+                val_path = out_dir / f"{json_file.stem}_val.parquet"
+                
+                train_ds.to_parquet(str(train_path))
+                val_ds.to_parquet(str(val_path))
+                
+                print(f"✓ Converted {len(train_ds)} train + {len(val_ds)} val rows to:")
+                print(f"    - {train_path}")
+                print(f"    - {val_path}")
+                
+                # Clean up
+                del train_ds, val_ds, split
+            else:
+                # Save single file
+                ds.to_parquet(str(parquet_file))
+                print(f"✓ Converted {len(rows)} row(s) to {parquet_file}")
+            
+            total_processed += 1
+            
+            # Clean up
             del ds
+            
+        except Exception as e:
+            total_errors += 1
+            print(f"Error converting {json_file.name}: {e}", file=sys.stderr)
+            # Continue with next file
+            continue
+    
+    # Summary
+    print(f"\n{'='*60}")
+    print(f"Summary:")
+    print(f"  Files processed: {total_processed}")
+    if total_errors > 0:
+        print(f"  Files with errors: {total_errors}", file=sys.stderr)
+    print(f"{'='*60}")
     
     # Force cleanup before exit
     import gc
