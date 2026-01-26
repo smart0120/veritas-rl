@@ -412,6 +412,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     # Setup paths
     data_processing_dir = Path(__file__).parent
+    project_root = data_processing_dir.parent
     results_dir = data_processing_dir / "results"
     
     if not results_dir.exists():
@@ -423,11 +424,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not results_dir.is_dir():
         raise ValueError(f"Path exists but is not a directory: {results_dir}")
 
-    # Determine output directory
+    # Determine output directory (relative to project root)
     if args.out_dir:
         out_dir = Path(args.out_dir)
         if not out_dir.is_absolute():
-            out_dir = data_processing_dir / out_dir
+            out_dir = project_root / out_dir
     else:
         # Default: save parquet files in results folder
         out_dir = results_dir
