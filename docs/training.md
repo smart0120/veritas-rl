@@ -23,7 +23,7 @@ project-specific wrappers and scripts.
 The recommended way to run SFT is via the helper script:
 
 - **Script**: `train/scripts/lgc-v2-SFT-trainer.sh`
-- **Model**: `Qwen/Qwen3-4B-Instruct-2507`
+- **Model**: `Qwen/Qwen3Guard-Gen-8B`
 - **Data**: `train/parquet/train.parquet`, `train/parquet/val.parquet`
 - **GPUs**: `--nproc_per_node=2` (adjustable via `gpu_count` in the script)
 - **Recommended hardware**: **at least 2× A100 GPUs** (1600GB or larger) for the provided settings
@@ -46,7 +46,7 @@ What the script does:
   - Optional: **`WANDB_API_KEY`** (for online logging) or `WANDB_MODE=offline`
 - Installs `flashinfer-python` / `flashinfer-cubin` for better performance.
 - Downloads the base model:
-  - `Qwen/Qwen3-4B-Instruct-2507` → `train/models/Qwen/Qwen3-4B-Instruct-2507`
+  - `Qwen/Qwen3Guard-Gen-8B` → `train/models/Qwen/Qwen3Guard-Gen-8B`
 - Points the FSDP SFT trainer at:
   - `data.train_files=train/parquet/train.parquet`
   - `data.val_files=train/parquet/val.parquet`

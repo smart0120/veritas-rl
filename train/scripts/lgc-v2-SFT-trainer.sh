@@ -37,7 +37,7 @@ python -m pip install -U flashinfer-python==0.4.1 flashinfer-cubin==0.4.1
 # ================================================
 # Setting Model Path and Download Model and Dataset
 # ================================================
-pure_agent_model_name="Qwen/Qwen3-4B-Instruct-2507"
+pure_agent_model_name="Qwen/Qwen3Guard-Gen-8B"
 agent_model_path="${PWD}/train/models/${pure_agent_model_name}"
 dataset_path="train/parquet"
 

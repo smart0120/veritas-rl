@@ -35,7 +35,7 @@ export CUDA_LAUNCH_BLOCKING=0  # Async CUDA operations
 # ================================================
 DATASET_PATH="${PWD}/train/tools/dataset-manager.py"
 REWARD_FN_PATH="${PWD}/train/tools/reward-manager.py"
-pure_agent_model_name="Qwen/Qwen3-4B-Instruct-2507"
+pure_agent_model_name="Qwen/Qwen3Guard-Gen-8B"
 agent_model_path="${PWD}/train/models/${pure_agent_model_name}"
 
 # ================================================
@@ -49,8 +49,8 @@ if [ -z "$WANDB_API_KEY" ] && [ "$WANDB_MODE" != "offline" ]; then
     echo "Set it with: export WANDB_API_KEY=your_key_here"
     echo "Or run with: WANDB_MODE=offline"
 fi
-export WANDB_DIR=train/artifacts/wandb/Qwen3-4B-Instruct-${DATE}
-export WANDB_PROJECT=Qwen3-4B-Instruct
+export WANDB_DIR=train/artifacts/wandb/Qwen/Qwen3Guard-Gen-8B-${DATE}
+export WANDB_PROJECT=Qwen/Qwen3Guard-Gen-8B
 export WANDB_EXP=${pure_agent_model_name}-${TIME}-grpo
 
 # ================================================
