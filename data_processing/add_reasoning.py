@@ -495,10 +495,9 @@ async def main() -> None:
     total_errors = 0
     
     for input_path in input_files:
-        # Output to reasoned directory with -reasoned suffix
-        # e.g., 0-999.jsonl -> 0-999-reasoned.jsonl
-        input_stem = input_path.stem  # filename without extension
-        output_path = reasoned_dir / f"{input_stem}-reasoned.jsonl"
+        # Output to reasoned directory with same filename as input
+        # e.g., generated/0-999.jsonl -> reasoned/0-999.jsonl
+        output_path = reasoned_dir / input_path.name
         
         # Skip if output already exists (avoid calling DeepSeek API)
         if output_path.exists():

@@ -1,27 +1,21 @@
 """
 Evaluate answers in generated dataset JSONL files using environment adapters.
 
-This script reads JSONL files with prompts and answers, then evaluates each answer
-using the appropriate environment adapter to compute accuracy scores.
+This script reads all JSONL files from data_processing/{env}/{from}/ folder and evaluates
+each answer using the appropriate environment adapter to compute accuracy scores.
+
+Results are automatically saved to:
+    data_processing/results/{filename}.json
 
 Usage:
-    # Evaluate LGC-V2 dataset
-    python data_processing/evaluate_dataset.py \
-      --input data_processing/dataset/lgc-v2.jsonl \
-      --env lgc-v2 \
-      --output data_processing/results/lgc-v2-eval.json
+    # Evaluate reasoned datasets (default)
+    python data_processing/evaluate_dataset.py --env trace
 
-    # Evaluate Trace dataset
-    python data_processing/evaluate_dataset.py \
-      --input data_processing/dataset/trace-random.jsonl \
-      --env trace \
-      --output data_processing/results/trace-eval.json
+    # Evaluate generated datasets
+    python data_processing/evaluate_dataset.py --env trace --from generated
 
     # Show detailed per-sample results
-    python data_processing/evaluate_dataset.py \
-      --input data_processing/dataset/lgc-v2.jsonl \
-      --env lgc-v2 \
-      --verbose
+    python data_processing/evaluate_dataset.py --env lgc-v2 --verbose
 """
 
 import argparse
@@ -425,12 +419,6 @@ async def main() -> None:
         description="Evaluate answers in dataset JSONL files"
     )
     parser.add_argument(
-        "--input",
-        type=str,
-        required=True,
-        help="Input JSONL file path"
-    )
-    parser.add_argument(
         "--env",
         type=str,
         required=True,
@@ -438,10 +426,12 @@ async def main() -> None:
         help="Environment type"
     )
     parser.add_argument(
-        "--output",
+        "--from",
         type=str,
-        default=None,
-        help="Output JSON file path (if not provided, prints to stdout)"
+        default="reasoned",
+        choices=["generated", "reasoned"],
+        dest="from_dir",
+        help="Source directory: 'generated' or 'reasoned' (default: reasoned)"
     )
     parser.add_argument(
         "--verbose",
@@ -465,41 +455,88 @@ async def main() -> None:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in --adapter-config: {e}") from e
     
-    # Resolve and validate input path
-    input_path = Path(args.input)
-    if not input_path.is_absolute():
-        input_path = Path.cwd() / input_path
+    # Setup paths
+    data_processing_dir = Path(__file__).parent
+    input_dir = data_processing_dir / args.env / args.from_dir
+    results_dir = data_processing_dir / "results"
     
-    validate_file_path(input_path, must_exist=True, extensions=(".jsonl", ".json"))
+    if not input_dir.exists():
+        raise FileNotFoundError(
+            f"Input directory not found: {input_dir}. "
+            f"Make sure to generate datasets first using generate_dataset.py"
+        )
     
-    # Evaluate dataset
-    stats = await evaluate_dataset(
-        input_path,
-        args.env,
-        adapter_config,
-        args.verbose
-    )
+    if not input_dir.is_dir():
+        raise ValueError(f"Path exists but is not a directory: {input_dir}")
     
-    # Print summary
-    _print_summary(stats)
+    # Create results directory if it doesn't exist
+    results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save or print results
-    results_dict = _stats_to_dict(stats)
-    output_json = json.dumps(results_dict, indent=2, ensure_ascii=False)
+    # Find all input files
+    input_files = sorted(input_dir.glob("*.jsonl"))
     
-    if args.output:
-        output_path = Path(args.output)
-        validate_directory_path(output_path.parent, must_exist=False, create=True)
+    if not input_files:
+        raise ValueError(
+            f"No JSONL files found in {input_dir}. "
+            f"Make sure to generate datasets first."
+        )
+    
+    print(f"Found {len(input_files)} file(s) to evaluate in {input_dir}")
+    
+    # Process each file
+    total_processed = 0
+    total_errors = 0
+    
+    for input_path in input_files:
+        # Output to results directory with same filename but .json extension
+        output_path = results_dir / f"{input_path.stem}.json"
+        
+        # Skip if output already exists
+        if output_path.exists():
+            print(f"Skipping {input_path.name} (results already exist: {output_path.name})")
+            continue
+        
+        print(f"\n{'='*60}")
+        print(f"Evaluating: {input_path.name}")
+        print(f"{'='*60}")
         
         try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(output_json)
-            print(f"\nDetailed results saved to: {output_path}")
-        except (OSError, IOError) as e:
-            raise RuntimeError(f"Failed to write output file {output_path}: {e}") from e
-    else:
-        print("\nDetailed Results (JSON):")
-        print(output_json)
+            # Evaluate dataset
+            stats = await evaluate_dataset(
+                input_path,
+                args.env,
+                adapter_config,
+                args.verbose
+            )
+            
+            # Print summary
+            _print_summary(stats)
+            
+            # Save results
+            results_dict = _stats_to_dict(stats)
+            output_json = json.dumps(results_dict, indent=2, ensure_ascii=False)
+            
+            try:
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(output_json)
+                print(f"\n✓ Results saved to: {output_path}")
+                total_processed += 1
+            except (OSError, IOError) as e:
+                raise RuntimeError(f"Failed to write output file {output_path}: {e}") from e
+                
+        except Exception as e:
+            total_errors += 1
+            print(f"Error evaluating {input_path.name}: {e}", file=sys.stderr)
+            # Continue with next file
+            continue
+    
+    # Summary
+    print(f"\n{'='*60}")
+    print(f"Summary:")
+    print(f"  Files processed: {total_processed}")
+    if total_errors > 0:
+        print(f"  Files with errors: {total_errors}", file=sys.stderr)
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
