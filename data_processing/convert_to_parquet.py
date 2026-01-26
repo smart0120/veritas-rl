@@ -396,6 +396,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         action="store_true",
         help="Shuffle before splitting.",
     )
+    p.add_argument(
+        "--file-index",
+        type=int,
+        default=None,
+        help="Select specific file by index from sorted file list (0-based). "
+             "If not provided, processes all JSON files.",
+    )
 
     args = p.parse_args(argv)
     
@@ -428,7 +435,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     # Create output directory if it doesn't exist
     validate_directory_path(out_dir, must_exist=False, create=True)
 
-    # Find all JSON files
+    # Find all JSON files and sort by name
     json_files = sorted(results_dir.glob("*.json"))
     
     if not json_files:
@@ -437,7 +444,19 @@ def main(argv: Optional[List[str]] = None) -> None:
             f"Make sure to run evaluate_dataset.py first."
         )
     
-    print(f"Found {len(json_files)} JSON file(s) to convert in {results_dir}")
+    # Select specific file if file_index is provided
+    if args.file_index is not None:
+        if args.file_index < 0:
+            raise ValueError(f"--file-index must be >= 0, got {args.file_index}")
+        if args.file_index >= len(json_files):
+            raise ValueError(
+                f"--file-index {args.file_index} is out of range. "
+                f"Found {len(json_files)} file(s). Valid indices: 0-{len(json_files) - 1}"
+            )
+        json_files = [json_files[args.file_index]]
+        print(f"Selected file {args.file_index}: {json_files[0].name}")
+    else:
+        print(f"Found {len(json_files)} JSON file(s) to convert in {results_dir}")
     
     # Process each file
     total_processed = 0
