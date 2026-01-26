@@ -4,7 +4,7 @@ Generate dataset (problems + answers) from environments.
 This script can generate datasets from both lgc-v2 and trace environments,
 including both the problem (prompt) and the answer/ground truth.
 
-Files are automatically saved in chunks of 1000 records to:
+Files are automatically saved in chunks (default: 1000 records) to:
     data_processing/{env_name}/generated/{start_num}-{end_num}.jsonl
 
 Usage:
@@ -13,6 +13,9 @@ Usage:
 
     # Generate with higher concurrency for faster generation
     python data_processing/generate_dataset.py --env lgc-v2 --num-samples 1000 --concurrency 8
+
+    # Generate with custom chunk size
+    python data_processing/generate_dataset.py --env trace --num-samples 5000 --chunk-size 2000
 
     # Generate Trace dataset
     python data_processing/generate_dataset.py --env trace --num-samples 1000
@@ -61,6 +64,7 @@ class GenerationConfig:
     random_selection: bool = False
     adapter_config: Optional[Dict[str, Any]] = None
     concurrency: int = DEFAULT_CONCURRENCY  # Number of concurrent generations
+    chunk_size: int = CHUNK_SIZE  # Number of samples per file
 
 
 def format_answer_for_task_type(answer: str, task_type: str, prompt: str = "") -> str:
@@ -583,6 +587,13 @@ async def main() -> None:
         help=f"Number of concurrent generations (default: {DEFAULT_CONCURRENCY}). "
              "Higher values speed up generation but use more resources."
     )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=CHUNK_SIZE,
+        help=f"Number of samples per file (default: {CHUNK_SIZE}). "
+             "Files are saved in chunks of this size."
+    )
     
     args = parser.parse_args()
     
@@ -590,6 +601,7 @@ async def main() -> None:
     validate_positive_int(args.num_samples, "--num-samples")
     validate_non_negative_int(args.start_task_id, "--start-task-id")
     validate_positive_int(args.concurrency, "--concurrency")
+    validate_positive_int(args.chunk_size, "--chunk-size")
     
     # Parse adapter config
     adapter_config: Optional[Dict[str, Any]] = None
@@ -611,7 +623,8 @@ async def main() -> None:
         start_task_id=args.start_task_id,
         random_selection=args.random_selection,
         adapter_config=adapter_config,
-        concurrency=args.concurrency
+        concurrency=args.concurrency,
+        chunk_size=args.chunk_size
     )
     
     # Print generation info
@@ -668,8 +681,8 @@ async def main() -> None:
                 # Get task_id from sample
                 task_id = sample.get("task_id", samples_generated)
                 
-                # Check if we need to start a new file (every 1000 samples)
-                if current_file is None or current_file_samples >= CHUNK_SIZE:
+                # Check if we need to start a new file (every chunk_size samples)
+                if current_file is None or current_file_samples >= config.chunk_size:
                     # Close previous file if open
                     close_current_file()
                     
