@@ -1,10 +1,13 @@
 """
 Add reasoning to dataset using DeepSeek API with deepseek-reasoner model.
 
-This script reads a dataset JSONL file and generates reasoning for each sample
-using DeepSeek API with deepseek-reasoner model. The reasoning is combined with 
-the original answer and placed in the "answer" field. The answer field contains: 
-reasoning + final answer.
+This script reads all JSONL files from data_processing/{env}/generated/ folder and generates 
+reasoning for each sample using DeepSeek API with deepseek-reasoner model. 
+The reasoning is combined with the original answer and placed in the "answer" field. 
+The answer field contains: reasoning + final answer.
+
+Files are automatically processed and saved as:
+    data_processing/{env}/reasoned/{generated_filename}.jsonl
 
 Rate Limit:
 DeepSeek API does NOT constrain user's rate limit. We will try our best to serve 
@@ -24,10 +27,8 @@ the connection. No retry logic is implemented - requests wait up to the timeout
 for response.
 
 Usage:
-    python data_processing/add_reasoning.py \
-      --input data_processing/dataset/swe-synth.jsonl \
-      --output data_processing/dataset/swe-synth-with-reasoning.jsonl \
-      --timeout 600
+    python data_processing/add_reasoning.py --env trace --timeout 600
+    python data_processing/add_reasoning.py --env lgc-v2 --timeout 600
 """
 
 import argparse
@@ -36,7 +37,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     from dotenv import load_dotenv
@@ -433,16 +434,10 @@ async def main() -> None:
         description="Add reasoning to dataset using DeepSeek API with thinking mode"
     )
     parser.add_argument(
-        "--input",
+        "--env",
         type=str,
-        required=True,
-        help="Input JSONL file path"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        required=True,
-        help="Output JSONL file path"
+        default="trace",
+        help="Environment name (default: trace). Files will be loaded from data_processing/{env}/"
     )
     parser.add_argument(
         "--timeout",
@@ -462,24 +457,79 @@ async def main() -> None:
     args = parser.parse_args()
     
     # Validate inputs
-    input_path = Path(args.input)
-    validate_file_path(input_path, must_exist=True, extensions=(".jsonl", ".json"))
-    
-    output_path = Path(args.output)
-    validate_directory_path(output_path.parent, must_exist=False, create=True)
-    
     if args.timeout < 1:
         raise ValueError("--timeout must be at least 1")
     if args.max_concurrent < 1:
         raise ValueError("--max-concurrent must be at least 1")
     
-    # Process dataset
-    await process_dataset(
-        input_path,
-        output_path,
-        args.timeout,
-        args.max_concurrent,
-    )
+    # Setup paths
+    data_processing_dir = Path(__file__).parent
+    generated_dir = data_processing_dir / args.env / "generated"
+    reasoned_dir = data_processing_dir / args.env / "reasoned"
+    
+    if not generated_dir.exists():
+        raise FileNotFoundError(
+            f"Generated directory not found: {generated_dir}. "
+            f"Make sure to generate datasets first using generate_dataset.py"
+        )
+    
+    if not generated_dir.is_dir():
+        raise ValueError(f"Path exists but is not a directory: {generated_dir}")
+    
+    # Create reasoned directory if it doesn't exist
+    reasoned_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Find all input files
+    input_files = sorted(generated_dir.glob("*.jsonl"))
+    
+    if not input_files:
+        raise ValueError(
+            f"No JSONL files found in {generated_dir}. "
+            f"Make sure to generate datasets first using generate_dataset.py"
+        )
+    
+    print(f"Found {len(input_files)} file(s) to process in {generated_dir}")
+    
+    # Process each file
+    total_processed = 0
+    total_errors = 0
+    
+    for input_path in input_files:
+        # Output to reasoned directory with -reasoned suffix
+        # e.g., 0-999.jsonl -> 0-999-reasoned.jsonl
+        input_stem = input_path.stem  # filename without extension
+        output_path = reasoned_dir / f"{input_stem}-reasoned.jsonl"
+        
+        # Skip if output already exists (avoid calling DeepSeek API)
+        if output_path.exists():
+            print(f"Skipping {input_path.name} (reasoned file already exists: {output_path.name})")
+            continue
+        
+        print(f"\n{'='*60}")
+        print(f"Processing: {input_path.name} -> {output_path.name}")
+        print(f"{'='*60}")
+        
+        try:
+            await process_dataset(
+                input_path,
+                output_path,
+                args.timeout,
+                args.max_concurrent,
+            )
+            total_processed += 1
+        except Exception as e:
+            total_errors += 1
+            print(f"Error processing {input_path.name}: {e}", file=sys.stderr)
+            # Continue with next file
+            continue
+    
+    # Summary
+    print(f"\n{'='*60}")
+    print(f"Summary:")
+    print(f"  Files processed: {total_processed}")
+    if total_errors > 0:
+        print(f"  Files with errors: {total_errors}", file=sys.stderr)
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":

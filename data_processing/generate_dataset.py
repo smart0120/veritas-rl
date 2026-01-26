@@ -5,7 +5,7 @@ This script can generate datasets from both lgc-v2 and trace environments,
 including both the problem (prompt) and the answer/ground truth.
 
 Files are automatically saved in chunks of 1000 records to:
-    data_processing/{env_name}/{start_num}-{end_num}.jsonl
+    data_processing/{env_name}/generated/{start_num}-{end_num}.jsonl
 
 Usage:
     # Generate LGC-V2 dataset
@@ -636,8 +636,8 @@ async def main() -> None:
     errors_count = 0
     max_errors = config.num_samples // 10  # Allow up to 10% errors
     
-    # Create output directory: data_processing/{env_name}/
-    output_dir = Path(__file__).parent / config.env
+    # Create output directory: data_processing/{env_name}/generated/
+    output_dir = Path(__file__).parent / config.env / "generated"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     current_file = None
