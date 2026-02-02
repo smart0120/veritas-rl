@@ -174,4 +174,20 @@ def get_env_adapter(env: str, config: Optional[Dict[str, Any]] = None) -> EnvAda
             dataset_shuffle=bool(config.get("dataset_shuffle", False)),
         )
 
+    if env == "openspiel":
+        from openspiel_adapter import OpenSpielAdapter
+        gt = config.get("game_types")
+        if gt is not None and not isinstance(gt, list):
+            gt = [gt] if gt else []
+        return OpenSpielAdapter(
+            cases=config.get("cases"),
+            game_list=config.get("game_list"),
+            game_configs=config.get("game_configs"),
+            game_types=gt,
+            num_tasks_per_case=int(config.get("num_tasks_per_case", config.get("num_tasks_per_game", 100))),
+            max_random_steps=int(config.get("max_random_steps", 0)),
+            reward_mode=str(config.get("reward_mode", "outcome")),
+            seed=config.get("seed"),
+        )
+
     raise ValueError(f"Unknown env adapter: {env}")

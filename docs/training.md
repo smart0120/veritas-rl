@@ -122,6 +122,45 @@ The RL script follows the same pattern as SFT:
 with the provided configs, plan for **at least 4× H200 GPUs** (or comparable)
 to get reasonable throughput and headroom.
 
+#### OpenSpiel (fixed tasks per case)
+
+**How to use `openspiel-ppo-trainer.sh`**
+
+1. **Prerequisites**
+   - **OpenSpiel** installed so `import pyspiel` works in the training environment (usually build from source: [OpenSpiel installation](https://github.com/google-deepmind/open_spiel#installation)). If you train inside the VERL Docker container, install OpenSpiel inside that image or mount a pre-built install.
+   - **HF_TOKEN** set (e.g. in `.env`) for model download.
+   - Training is intended to run **inside the VERL Docker container**: from repo root run `cd train && ./docker_run_verl.sh`, then inside the container run the script.
+
+2. **Run the trainer** (from repo root, or from inside the container at `/workspace/veritas-rl`):
+   ```bash
+   bash train/scripts/openspiel-ppo-trainer.sh
+   ```
+
+3. **Optional overrides** (pass at the end of the command):
+   - **`game_types`** — list of game short names or full case strings (e.g. `[hex, go, chess]`). If set, only these games/cases are trained on; if not set, **all games** are used. A short name like `hex` matches all hex cases (e.g. `hex(board_size=5)`, `hex(board_size=7)`). You can set it **as a script parameter**: `GAME_TYPES="hex,go,chess" bash train/scripts/openspiel-ppo-trainer.sh` (comma-separated; empty = all games).
+   - **`cases`** — list of game load strings, one per "case" (e.g. board 2×2, 3×3, … 5×5). Each case gets a fixed number of tasks. Example: hex 5×5, 7×7, 9×9 and go 9×9, 13×13. Set via Hydra as a list (see your config format) or use **`game_list`** + **`game_configs`** to build cases automatically (one case per (game, config)).
+   - **`num_tasks_per_case`** (default 100) — fixed number of tasks per case. Total fixed tasks = len(cases) × num_tasks_per_case.
+   - **`max_random_steps`** — random rollout steps from root before presenting the state.
+   - **`reward_mode`** — `outcome` (play out and use return) or `legal` (1 if legal else 0).
+   - **`seed`** — base seed for reproducibility.
+
+   Example (more tasks per case, random rollout):
+   ```bash
+   bash train/scripts/openspiel-ppo-trainer.sh \
+     data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
+     data.custom_cls.config.adapter_config.max_random_steps=5
+   ```
+
+**Fixed tasks per case (e.g. board 2×2, 3×3, … 5×5)**
+
+A **case** is one (game + config), e.g. hex 5×5, hex 7×7, go 9×9, breakthrough 6×6, dots_and_boxes 3×3, 4×4, 5×5.
+
+- You provide a list **`cases`** of OpenSpiel game load strings (e.g. `["hex(board_size=5)", "hex(board_size=7)", "go(go_board_size=9)"]`), or use **`game_list`** + **`game_configs`** to build one case per (game, config).
+- You set **`num_tasks_per_case`** (default 100). **Total fixed tasks** = len(cases) × num_tasks_per_case. Same task_id always yields the same state (seed = base_seed + task_index).
+- In `train/tools/openspiel_adapter.py`, **`DEFAULT_CASES_BOARD_SIZES`** is an example list (hex 5/7/9, go 9/13, breakthrough 6×6/8×8, dots_and_boxes 3×3/4×4/5×5, clobber 5×5/6×6/7×7, othello, chess, checkers). Use it as a template or pass your own **`cases`** in adapter config.
+
+The adapter lives in `train/tools/openspiel_adapter.py` and is registered as env `openspiel`. Reward is routed by `extra_info["env"]` to the OpenSpiel adapter automatically.
+
 ---
 
 ## WandB Setup and Monitoring

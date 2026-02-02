@@ -72,6 +72,9 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
+# OpenSpiel: for dynamic game env (train/tools/openspiel_adapter.py).
+# Official install is usually from source: https://github.com/google-deepmind/open_spiel
+openspiel = []
 
 [build-system]
 requires = ["hatchling"]

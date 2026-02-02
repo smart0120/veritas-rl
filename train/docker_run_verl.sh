@@ -28,6 +28,8 @@ fi
 # ================================================
 # Mount veritas-rl directory to /workspace/veritas-rl
 # and set working directory to veritas-rl
+# Note: --ulimit nofile/memlock removed to avoid "rlimit type 8: operation not permitted"
+# on restricted hosts (e.g. Kubernetes). Add back if your host allows it.
 docker run -it \
   $ENV_FILE_ARG \
   --name verl \
@@ -35,8 +37,6 @@ docker run -it \
   --runtime=nvidia \
   --gpus all \
   --shm-size=16g \
-  --ulimit nofile=65535:65535 \
-  --ulimit memlock=-1:-1 \
   --ipc=host \
   --privileged \
   --network=host \

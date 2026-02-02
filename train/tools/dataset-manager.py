@@ -1,8 +1,12 @@
 """
 Dynamic env dataset for VERL.
 
-This started as an LGC-V2-only dynamic dataset. It now supports any single-turn,
-verifiable env implemented in `tools/env_adapter.py` (currently: lgc-v2, trace).
+Supports single-turn verifiable envs in `tools/env_adapter.py`:
+- lgc-v2, trace: use DynamicEnvDataset with config.env=lgc-v2 or trace.
+- openspiel: use OpenSpielDataset (or DynamicEnvDataset with config.env=openspiel).
+
+OpenSpielDataset: dedicated dataset for OpenSpiel; forces env=openspiel and uses
+adapter_config (cases, num_tasks_per_case, max_random_steps, reward_mode, seed).
 """
 
 import asyncio
@@ -12,7 +16,7 @@ from collections import deque
 from typing import Optional
 
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer
 
@@ -54,7 +58,11 @@ class DynamicEnvDataset(Dataset):
         self.env = self.config.get("env", "lgc-v2")
         self.adapter_config = self.config.get("adapter_config", {}) or {}
         self.adapter = get_env_adapter(self.env, config=self.adapter_config)
-        
+        # OpenSpiel: fixed number of tasks per game (total = num_games * num_tasks_per_game)
+        self._openspiel_total_tasks = None
+        if str(self.env).lower() == "openspiel" and hasattr(self.adapter, "get_total_fixed_tasks"):
+            self._openspiel_total_tasks = self.adapter.get_total_fixed_tasks()
+
         # Configuration
         self.prompt_key = self.config.get("prompt_key", "prompt")
         self.max_prompt_length = self.config.get("max_prompt_length", 2048)
@@ -121,6 +129,11 @@ class DynamicEnvDataset(Dataset):
     
     def __len__(self):
         """Return dataset length"""
+        if self._openspiel_total_tasks is not None:
+            # OpenSpiel: fixed set of tasks (len(cases) * num_tasks_per_case)
+            if self.max_samples >= 0:
+                return min(self.max_samples, self._openspiel_total_tasks)
+            return self._openspiel_total_tasks
         if self.max_samples == -1:
             # Infinite dataset - return a large number
             return 10_000_000  # Large number for "infinite"
@@ -152,6 +165,16 @@ class DynamicEnvDataset(Dataset):
             range_width = (self.task_id_ranges[task_type][1] - self.task_id_ranges[task_type][0]) + 1
             task_id = base_id + int(self.rng.randint(0, range_width - 1))
             return int(task_id), str(task_type)
+
+        # OpenSpiel: task_id in [0, total_fixed_tasks); shuffle or cycle by index
+        if self._openspiel_total_tasks is not None and self._openspiel_total_tasks > 0:
+            total = self._openspiel_total_tasks
+            if self.shuffle and self.seed is not None:
+                self.rng.seed(self.seed + index)
+                task_id = self.rng.randint(0, total - 1)
+            else:
+                task_id = index % total
+            return int(task_id), str(self.env)
 
         # Generic env: task_id is based on index (optionally shuffled)
         if self.seed is not None:
@@ -399,6 +422,50 @@ class DynamicEnvDataset(Dataset):
         }
         
         return sample
+
+
+class OpenSpielDataset(DynamicEnvDataset):
+    """
+    Dataset for OpenSpiel env only: fixed tasks per case (e.g. per board size).
+
+    Forces env=openspiel and builds adapter from config.adapter_config.
+    Compatible with VERL's RLHFDataset interface. Use in scripts with:
+      data.custom_cls.name=OpenSpielDataset
+      data.custom_cls.config.adapter_config.cases=...  # optional
+      data.custom_cls.config.adapter_config.num_tasks_per_case=100
+    """
+
+    def __init__(
+        self,
+        data_files=None,
+        tokenizer: PreTrainedTokenizer = None,
+        processor=None,
+        config: DictConfig = None,
+        max_samples: int = -1,
+    ):
+        config = config or DictConfig({})
+        # Build config with env=openspiel and adapter_config for OpenSpiel only
+        adapter_config = dict(config.get("adapter_config", {}) or {})
+        openspiel_config = OmegaConf.create({
+            "env": "openspiel",
+            "adapter_config": adapter_config,
+            "prompt_key": config.get("prompt_key", "prompt"),
+            "max_prompt_length": config.get("max_prompt_length", 2048),
+            "return_raw_chat": config.get("return_raw_chat", False),
+            "shuffle": config.get("shuffle", True),
+            "seed": config.get("seed", None),
+            "cache_size": config.get("cache_size", 1000),
+            "prefetch_size": config.get("prefetch_size", 0),
+            "truncation": config.get("truncation", "error"),
+            "max_generation_retries": config.get("max_generation_retries", 3),
+        })
+        super().__init__(
+            data_files=data_files,
+            tokenizer=tokenizer,
+            processor=processor,
+            config=openspiel_config,
+            max_samples=max_samples,
+        )
 
 
 # Backwards-compatible alias (older configs/scripts may refer to this name)
