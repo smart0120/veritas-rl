@@ -3,27 +3,24 @@
 # HOW TO USE
 # ----------
 # 1. Prerequisites
-#    - OpenSpiel (pyspiel) installed so "import pyspiel" works in the training env.
 #    - HF_TOKEN set (e.g. in .env) for model download.
-#    - Training runs inside the VERL Docker container (recommended): from repo root run
-#      "cd train && ./docker_run_verl.sh", then inside the container run this script.
+#    - Model: use HuggingFace repo_id only (e.g. rhuanmatias/trained-top-sn120). Optional: set AGENT_MODEL_REPO_ID in .env. Do not use a local path.
+#    - GPU: if you see "Free memory ... less than desired GPU memory utilization", set GPU_MEMORY_UTILIZATION=0.85 (default) or lower (e.g. 0.8).
+#    - OpenSpiel is installed by this script if missing (pip install open_spiel).
+#    - Run inside the VERL Docker container: from repo root run "cd train && ./docker_run_verl.sh", then run this script.
 #
 # 2. Run (from repo root, or from inside the container at /workspace/veritas-rl)
 #    bash train/scripts/openspiel-ppo-trainer.sh
 #
 # 3. Optional: restrict to specific games via GAME_TYPES (comma-separated). Empty = all games.
 #    GAME_TYPES="hex,go,chess" bash train/scripts/openspiel-ppo-trainer.sh
-#    Or export then run: export GAME_TYPES="hex,go,chess"; bash train/scripts/openspiel-ppo-trainer.sh
 #
-# 4. Optional: other adapter overrides (num_tasks_per_case, max_random_steps, etc.)
+# 4. Optional: adapter overrides (use + prefix for Hydra struct)
 #    bash train/scripts/openspiel-ppo-trainer.sh \
-#      data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
-#      data.custom_cls.config.adapter_config.max_random_steps=5
+#      +data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
+#      +data.custom_cls.config.adapter_config.max_random_steps=5
 #
-# Fixed tasks per case: one "case" = one (game + config), e.g. hex 5x5, hex 7x7, go 9x9.
-# game_types: optional list of game short names or full case strings; if unset, train all.
-# num_tasks_per_case (default 100) = tasks per case; total = len(cases) * num_tasks_per_case.
-# See docs/training.md and train/tools/openspiel_adapter.py (DEFAULT_CASES_BOARD_SIZES).
+# See docs/training.md and train/tools/openspiel_adapter.py.
 
 set -x
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,8 +48,19 @@ export CUDA_LAUNCH_BLOCKING=0
 
 DATASET_PATH="${PWD}/train/tools/dataset-manager.py"
 REWARD_FN_PATH="${PWD}/train/tools/reward-manager.py"
-pure_agent_model_name="rhuanmatias/trained-top-sn120"
-agent_model_path="${PWD}/train/models/${pure_agent_model_name}"
+# Must be a HuggingFace repo_id (namespace/name). Do not use a local path or VERL/vLLM will fail with "Repo id must be in the form 'repo_name' or 'namespace/repo_name'".
+pure_agent_model_name="${AGENT_MODEL_REPO_ID:-Sota26/Affine-38-5HpqTamztoLsVqrHKv1aY4auSQKerdLBKHHTfvgebqGynTeq}"
+if [ "${pure_agent_model_name#/}" != "$pure_agent_model_name" ] || [ "${pure_agent_model_name#train/}" != "$pure_agent_model_name" ]; then
+    echo "ERROR: actor_rollout_ref.model.path must be a HuggingFace repo_id (e.g. org/model-name), not a path. Got: $pure_agent_model_name"
+    echo "Set AGENT_MODEL_REPO_ID=org/model-name in .env or the environment and run again."
+    exit 1
+fi
+
+# Ensure OpenSpiel is available (required for openspiel_adapter). Install inside container if missing.
+if ! python3 -c "import pyspiel" 2>/dev/null; then
+    echo "Installing open_spiel (required for OpenSpiel PPO)..."
+    pip install -q open_spiel
+fi
 
 DATE=$(date +%Y%m%d)
 TIME=$(date +%Y%m%d_%H%M%S)
@@ -70,24 +78,22 @@ model_save_path=${model_save_dir}
 kl_coef=0.001
 policy_learning_rate=6e-6
 rollout_sample_num=8
-train_batch_size=32
-ppo_mini_batch_size=16
+train_batch_size=16
+ppo_mini_batch_size=8
 ppo_micro_batch_size_per_gpu=4
 ppo_inner_epochs=1
-gpu_memory_utilization=0.9
-total_steps=10000
+# 0.85 fits ~69 GiB free on 79 GiB GPUs; increase to 0.9 only if more memory is free. Override with GPU_MEMORY_UTILIZATION=0.9
+gpu_memory_utilization="${GPU_MEMORY_UTILIZATION:-0.5}"
+total_steps=30
 tensor_model_parallel_size=2
-gpu_count=4
+gpu_count=2
 
-# Optional: GAME_TYPES = comma-separated list (e.g. hex,go,chess). Empty/unset = train all games.
 GAME_TYPES="${GAME_TYPES:-}"
-GAME_TYPES_OVERRIDE=""
+export GAME_TYPES
 if [ -n "$GAME_TYPES" ]; then
-  GAME_TYPES_OVERRIDE="data.custom_cls.config.adapter_config.game_types=[${GAME_TYPES}]"
   echo "🎮 Restricting to game_types: ${GAME_TYPES}"
 fi
 
-# OpenSpielDataset: env=openspiel forced; adapter_config: cases, num_tasks_per_case, game_types, max_random_steps, reward_mode, seed.
 HYDRA_FULL_ERROR=1 WANDB_MODE=offline python3 -m verl.trainer.main_ppo \
     hydra.run.dir=train/outputs \
     algorithm.adv_estimator=grpo \
@@ -100,7 +106,7 @@ HYDRA_FULL_ERROR=1 WANDB_MODE=offline python3 -m verl.trainer.main_ppo \
     data.max_prompt_length=9182 \
     data.max_response_length=2048 \
     data.dataloader_num_workers=8 \
-    actor_rollout_ref.model.path=${agent_model_path} \
+    actor_rollout_ref.model.path=${pure_agent_model_name} \
     data.truncation='left' \
     data.return_raw_chat=True \
     data.reward_fn_key="data_source" \
@@ -138,4 +144,4 @@ HYDRA_FULL_ERROR=1 WANDB_MODE=offline python3 -m verl.trainer.main_ppo \
     trainer.save_freq=50 \
     trainer.test_freq=50 \
     trainer.total_training_steps=${total_steps} \
-    trainer.val_before_train=False ${GAME_TYPES_OVERRIDE} "$@"
+    trainer.val_before_train=False "$@"

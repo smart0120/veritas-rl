@@ -431,8 +431,8 @@ class OpenSpielDataset(DynamicEnvDataset):
     Forces env=openspiel and builds adapter from config.adapter_config.
     Compatible with VERL's RLHFDataset interface. Use in scripts with:
       data.custom_cls.name=OpenSpielDataset
-      data.custom_cls.config.adapter_config.cases=...  # optional
-      data.custom_cls.config.adapter_config.num_tasks_per_case=100
+      +data.custom_cls.config.adapter_config.cases=...  # optional (use + so Hydra adds to struct)
+      +data.custom_cls.config.adapter_config.num_tasks_per_case=100
     """
 
     def __init__(

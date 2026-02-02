@@ -37,7 +37,7 @@ python -m pip install -U flashinfer-python==0.4.1 flashinfer-cubin==0.4.1
 # ================================================
 # Setting Model Path and Download Model and Dataset
 # ================================================
-pure_agent_model_name="rhuanmatias/trained-top-sn120"
+pure_agent_model_name="Sota26/Affine-35-5EZjhBoHzb2yGLTo1NvY7qvWjFxQw93WTHGGr9aYFueRsGES"
 agent_model_path="${PWD}/train/models/${pure_agent_model_name}"
 dataset_path="train/parquet"
 
@@ -47,9 +47,11 @@ hf download $pure_agent_model_name --local-dir $agent_model_path
 # ================================================
 task_name="lgc-v2"
 train_batch_size=8
-max_length=2048
-total_epoches=1
-gpu_count=1
+max_length=8192
+# truncation: "error" (raise), "left" (keep start), "right" (keep end)
+truncation_mode="right"
+total_epoches=10
+gpu_count=2
 
 DATE=$(date +%Y%m%d)
 TIME=$(date +%Y%m%d_%H%M%S)
@@ -59,9 +61,8 @@ if [ -z "$WANDB_API_KEY" ] && [ "$WANDB_MODE" != "offline" ]; then
     echo "Set it with: export WANDB_API_KEY=your_key_here"
     echo "Or run with: WANDB_MODE=offline"
 fi
-export WANDB_DIR=train/artifacts/wandb/Qwen3-4B-Instruct-${task_name}-${DATE}
 export WANDB_PROJECT=Qwen3-4B-Instruct
-export WANDB_EXP=${pure_agent_model_name}-${TIME}-"batch_size-"${train_batch_size}_"max_length-"${max_length}
+export WANDB_EXP="Sota26-35"
 # ================================================
 # Setting Model Save Path
 # ================================================
@@ -74,7 +75,7 @@ mkdir -p ${model_save_path}
 # ================================================
 # Start Training
 # ================================================
-WANDB_MODE=online torchrun --nnodes=1 --nproc_per_node=${gpu_count} \
+WANDB_MODE=offline torchrun --nnodes=1 --nproc_per_node=${gpu_count} \
      -m verl.trainer.fsdp_sft_trainer \
     hydra.run.dir=train/outputs \
     data.train_files=${dataset_path}/train.parquet \
@@ -84,6 +85,7 @@ WANDB_MODE=online torchrun --nnodes=1 --nproc_per_node=${gpu_count} \
     data.response_key=response \
     data.micro_batch_size_per_gpu=4 \
     data.max_length=${max_length} \
+    data.truncation=${truncation_mode} \
     model.fsdp_config.model_dtype=bf16 \
     model.partial_pretrain=${agent_model_path} \
     optim.lr=2e-6 \
@@ -96,5 +98,5 @@ WANDB_MODE=online torchrun --nnodes=1 --nproc_per_node=${gpu_count} \
     trainer.experiment_name=${WANDB_EXP} \
     trainer.logger='["console","wandb"]' \
     trainer.total_epochs=${total_epoches} \
-    trainer.save_freq=5 \
-    trainer.test_freq=5
+    trainer.save_freq=2000 \
+    trainer.test_freq=10000

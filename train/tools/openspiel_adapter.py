@@ -42,9 +42,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 FOCUS_CASES = [
     # Clobber: 3 configs (5x5, 6x6, 7x7)
-    "clobber(rows=5,cols=5)",
-    "clobber(rows=6,cols=6)",
-    "clobber(rows=7,cols=7)",
+    "clobber(rows=5,columns=5)",
+    "clobber(rows=6,columns=6)",
+    "clobber(rows=7,columns=7)",
     # Gin Rummy: default (OpenSpiel may support hand_size / knock_card variants)
     "gin_rummy",
     # Goofspiel: default + num_cards variants if supported (8–16 cards)
@@ -105,9 +105,9 @@ DEFAULT_CASES_BOARD_SIZES = [
     "dots_and_boxes(num_rows=3,num_cols=3)",
     "dots_and_boxes(num_rows=4,num_cols=4)",
     "dots_and_boxes(num_rows=5,num_cols=5)",
-    "clobber(rows=5,cols=5)",
-    "clobber(rows=6,cols=6)",
-    "clobber(rows=7,cols=7)",
+    "clobber(rows=5,columns=5)",
+    "clobber(rows=6,columns=6)",
+    "clobber(rows=7,columns=7)",
     "othello",
     "chess",
     "checkers",
@@ -271,9 +271,10 @@ def _play_out_random(state, rng: random.Random) -> "pyspiel.State":
     """Play out from state to terminal using random legal actions."""
     while not state.is_terminal():
         if state.is_chance_node():
-            outcomes, probs = state.chance_outcomes()
-            actions = [o[0] for o in outcomes]
-            probs_list = [o[1] for o in outcomes]
+            # chance_outcomes() returns a list of (outcome, prob) pairs, not (outcomes, probs)
+            chance_list = state.chance_outcomes()
+            actions = [o[0] for o in chance_list]
+            probs_list = [o[1] for o in chance_list]
             a = rng.choices(actions, weights=probs_list, k=1)[0]
         else:
             legal = state.legal_actions()
@@ -369,9 +370,10 @@ class OpenSpielAdapter:
         steps = 0
         while not state.is_terminal() and steps < self.max_random_steps:
             if state.is_chance_node():
-                outcomes, probs = state.chance_outcomes()
-                actions = [o[0] for o in outcomes]
-                probs_list = [o[1] for o in outcomes]
+                # chance_outcomes() returns a list of (outcome, prob) pairs, not (outcomes, probs)
+                chance_list = state.chance_outcomes()
+                actions = [o[0] for o in chance_list]
+                probs_list = [o[1] for o in chance_list]
                 a = self.rng.choices(actions, weights=probs_list, k=1)[0]
             else:
                 legal = state.legal_actions()

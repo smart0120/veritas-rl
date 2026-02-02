@@ -175,10 +175,14 @@ def get_env_adapter(env: str, config: Optional[Dict[str, Any]] = None) -> EnvAda
         )
 
     if env == "openspiel":
+        import os
         from openspiel_adapter import OpenSpielAdapter
         gt = config.get("game_types")
         if gt is not None and not isinstance(gt, list):
             gt = [gt] if gt else []
+        if not gt and os.environ.get("GAME_TYPES"):
+            # Avoid Hydra struct: read game_types from env instead of data.custom_cls.config
+            gt = [s.strip() for s in os.environ["GAME_TYPES"].split(",") if s.strip()]
         return OpenSpielAdapter(
             cases=config.get("cases"),
             game_list=config.get("game_list"),
