@@ -3,6 +3,11 @@
 # Use after OpenSpiel PPO training (openspiel-ppo-trainer.sh). Merges the actor
 # checkpoint for the given global step into target_dir.
 #
+# NOTE: The merged model's parameter count comes from the checkpoint. If you see
+# a different size than your base (e.g. 4.4B instead of 4B), the actor checkpoint
+# was saved with that architecture—check what model was loaded at training time
+# (AGENT_MODEL_REPO_ID / actor_rollout_ref.model.path in openspiel-ppo-trainer.sh).
+#
 # HOW TO USE
 # ----------
 # 1. Run from repo root (or from VERL container at /workspace/veritas-rl):
@@ -58,6 +63,10 @@ fi
 
 mkdir -p "$TARGET_DIR"
 echo "Merging PPO actor checkpoint (step $GLOBAL_STEP): $LOCAL_DIR -> $TARGET_DIR"
+# Optional: verify actor checkpoint config (param count comes from here)
+if [ -f "${LOCAL_DIR}/huggingface/config.json" ]; then
+    echo "Actor config: ${LOCAL_DIR}/huggingface/config.json"
+fi
 
 python3 -m verl.model_merger merge \
     --backend fsdp \
