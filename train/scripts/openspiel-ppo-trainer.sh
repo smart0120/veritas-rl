@@ -20,16 +20,16 @@
 #      +data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
 #      +data.custom_cls.config.adapter_config.max_random_steps=5
 #
-# 5. LoRA is default (VERL: fsdp/fsdp2 + sglang rollout; PEFT). Only adapter params trained; base frozen.
+# 5. LoRA is default (VERL: fsdp/fsdp2 + vllm rollout; PEFT). Only adapter params trained; base frozen.
 #    Saves only trainable LoRA adapters; use merge-ppo.sh then merge adapter into base if you want a full model.
 #    To full fine-tune (train all params): ENABLE_LORA=0 bash train/scripts/openspiel-ppo-trainer.sh
 #    Resume from adapter: LORA_ADAPTER_PATH=/path/to/adapter bash train/scripts/openspiel-ppo-trainer.sh
 #    Large model / low GPU: LAYERED_SUMMON=1 (sync LoRA to vLLM per-layer to reduce peak memory).
 #
-# 6. Rollout default is SGLang (use SGLang image in train/docker_run_verl.sh). To use vLLM instead:
-#    ROLLOUT_BACKEND=vllm bash train/scripts/openspiel-ppo-trainer.sh (and use the vLLM image).
-#    If you see "ModuleNotFoundError: No module named 'sglang'", you are in the vLLM image—stop the container
-#    (docker stop verl; docker rm verl), then start a new one with train/docker_run_verl.sh so it uses the SGLang image.
+# 6. Rollout and weight updates default is vLLM. Use the vLLM VERL image: train/docker_run_verl.sh
+#    (default IMAGE=verlai/verl:app-verl0.5-transformers4.55.4-vllm0.10.0-mcore0.13.0-te2.2).
+#    To use SGLang instead: set the SGLang image in train/docker_run_verl.sh and run with ROLLOUT_BACKEND=sglang.
+#    If you see "no module or parameter named 'block' in Qwen3ForCausalLM", use a Qwen2 base (AGENT_MODEL_REPO_ID=Qwen/Qwen2.5-4B-Instruct) or see docs/training.md.
 #
 # See docs/training.md and train/tools/openspiel_adapter.py.
 
@@ -48,6 +48,7 @@ fi
 export VLLM_USE_MODELSCOPE=0
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export VLLM_USE_V1=1
+# vLLM attention backend. If you see "flash_attn undefined symbol" (e.g. SetDevice), reinstall flash-attn in the container to match PyTorch/CUDA; see docs/training.md.
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN
 if [ -z "$HF_TOKEN" ]; then
     echo "ERROR: HF_TOKEN environment variable is not set"
@@ -117,8 +118,8 @@ if [ -n "$GAME_TYPES" ]; then
   echo "🎮 Restricting to game_types: ${GAME_TYPES}"
 fi
 
-# Rollout backend: sglang (default) or vllm. Requires the matching VERL image in train/docker_run_verl.sh (SGLang image for sglang).
-ROLLOUT_BACKEND="${ROLLOUT_BACKEND:-sglang}"
+# Rollout and weight updates backend: vllm (default) or sglang. Use matching VERL image in train/docker_run_verl.sh (vLLM image for vllm).
+ROLLOUT_BACKEND="${ROLLOUT_BACKEND:-vllm}"
 
 # Ensure SGLang is installed when using sglang rollout (VERL needs sglang[all]==0.5.2). Install in container if image lacks it.
 if [ "$ROLLOUT_BACKEND" = "sglang" ]; then
@@ -128,7 +129,7 @@ if [ "$ROLLOUT_BACKEND" = "sglang" ]; then
   fi
 fi
 
-# LoRA: required for VERL LoRA = strategy fsdp/fsdp2 + rollout.name=sglang/vllm + peft (lora_rank, lora_alpha, load_format=safetensors, target_modules).
+# LoRA: required for VERL LoRA = strategy fsdp/fsdp2 + rollout.name=vllm/sglang + peft (lora_rank, lora_alpha, load_format=safetensors, target_modules).
 # use_shm omitted: only safe for local model paths; this script uses HuggingFace repo_id (VERL would try copy_to_local and fail with FileNotFoundError).
 # Optional: layered_summon (large model / low GPU), lora_adapter_path (resume adapter).
 LORA_OVERRIDES=""

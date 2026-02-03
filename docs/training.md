@@ -186,6 +186,40 @@ This occurs when **vLLM** (used for rollout) loads a Qwen3-based model whose che
 - **3. Use a Qwen2 base:** Set `AGENT_MODEL_REPO_ID=Qwen/Qwen2.5-4B-Instruct` (or another Qwen2 model) in `.env` so rollout uses a vLLM-compatible model until your stack supports Qwen3.
 - **4. Patch vLLM:** In the container or `train/verl` submodule, fix the Qwen3 loader so it maps `block` to the checkpoint’s layer names (e.g. `model.layers`).
 
+#### ImportError: flash_attn undefined symbol (e.g. `_ZN3c104cuda9SetDeviceE...`)
+
+This is an **ABI mismatch**: the installed `flash_attn` wheel was built for a different PyTorch or CUDA version than the one in your container. VERL/SGLang (or their dependencies) load flash_attn and fail.
+
+- **Fix inside the container:** Reinstall flash-attn so it matches the current PyTorch and CUDA:
+  1. Check versions: `python3 -c "import torch; print(torch.__version__, torch.version.cuda)"` and `nvidia-smi`.
+  2. Uninstall and reinstall: `pip uninstall -y flash-attn && pip install flash-attn --no-build-isolation` (builds for your env; can be slow). Or use a [matching prebuilt wheel](https://flashattn.dev/#finder) for your PyTorch/CUDA/Python.
+  3. If you recently ran `pip install sglang[all]`, that may have pulled an incompatible flash-attn; reinstalling flash-attn as above after sglang often fixes it.
+- **Alternative:** Use a VERL Docker image whose flash-attn, PyTorch, and CUDA are already aligned (e.g. avoid mixing pip-installed sglang with an image built for a different stack).
+
+#### ImportError: cannot import name 'ReleaseMemoryOccupationReqInput' from 'sglang.srt.managers.tokenizer_manager'
+
+An **older VERL submodule** imports this from sglang; newer sglang removed or renamed it. Fix by **updating the VERL submodule** to the latest main (which no longer uses that import):
+
+```bash
+# From repo root, on the host (not inside Docker)
+git submodule update --init --recursive train/verl
+cd train/verl && git fetch origin && git checkout origin/main && cd ../..
+git add train/verl && git commit -m "chore: update VERL submodule for SGLang compatibility"  # optional
+```
+
+Then rebuild or restart the container so it uses the updated `train/verl` code. If the container mounts the repo at `/workspace/veritas-rl`, run the `git submodule update` and `git checkout` above on the host (where the repo is mounted from), then run the trainer again inside the container.
+
+#### IndexError: tuple index out of range (sglang/srt/patch_torch.py during update_weights)
+
+This occurs during **weight sync** from the training process to the SGLang rollout engine: SGLang’s `patch_torch.py` modifies a tuple during tensor serialization and hits an index that doesn’t exist (often due to a **sglang ↔ PyTorch version mismatch** or a bug in a specific sglang patch).
+
+- **Try in the container:**  
+  1. Pin the exact sglang version that matches your VERL image (e.g. the image may expect `sglang==0.5.2` without extras):  
+     `pip uninstall -y sglang && pip install sglang[all]==0.5.2 --force-reinstall`  
+  2. If you’re on a different PyTorch than the image was built with, either reinstall PyTorch to match the image or try a different sglang version (e.g. `pip install sglang[all]==0.5.2.post1` if available, or a newer 0.5.x if the fix is there).  
+  3. Check [sglang releases](https://github.com/sgl-project/sglang/releases) and [VERL issues](https://github.com/volcengine/verl/issues) for “patch_torch” or “update_weights” tuple/index errors.
+- **Workaround:** If you’re blocked, use **vLLM for rollout** instead of SGLang: in `train/docker_run_verl.sh` switch to the vLLM image, then run with `ROLLOUT_BACKEND=vllm bash train/scripts/openspiel-ppo-trainer.sh`. You may need a vLLM version that supports your model (e.g. Qwen3) or use a Qwen2 base model.
+
 ---
 
 ## WandB Setup and Monitoring

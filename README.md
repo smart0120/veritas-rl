@@ -162,6 +162,12 @@ GAME_TYPES="go,chess" bash train/scripts/openspiel-ppo-trainer.sh
 
 **Default:** If you don’t set `cases` or `game_configs`, the adapter uses **FOCUS_CASES** (7 games: clobber, gin_rummy, goofspiel, hex, leduc_poker, liars_dice, othello) with their config variants. To use all 21 games with variants, set `cases=AVAILABLE_CASES` in adapter config. See `train/tools/openspiel_adapter.py` (`FOCUS_CASES`, `AVAILABLE_CASES`).
 
+### Rollout backend: vLLM (default) or SGLang
+
+OpenSpiel PPO uses **vLLM** for rollout and weight updates by default. Use the vLLM VERL image: `train/docker_run_verl.sh` (default `IMAGE=verlai/verl:app-verl0.5-transformers4.55.4-vllm0.10.0-mcore0.13.0-te2.2`). Start the container, then run `bash train/scripts/openspiel-ppo-trainer.sh`.
+
+To use **SGLang** instead: set the SGLang image in `train/docker_run_verl.sh` and run with `ROLLOUT_BACKEND=sglang bash train/scripts/openspiel-ppo-trainer.sh`. See [docs/training.md](docs/training.md) for troubleshooting (flash_attn, ReleaseMemoryOccupationReqInput, patch_torch IndexError, Qwen3 "block" error).
+
 ### Training Workflow (overview)
 
 1. **Prepare Data**: For SFT only — generate and convert to parquet. For RL/OpenSpiel — no static dataset; dynamic env generates tasks.
