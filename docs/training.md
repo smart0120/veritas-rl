@@ -179,12 +179,12 @@ After training, merge the actor checkpoint to a single HuggingFace model. The me
 
 #### ValueError: "There is no module or parameter named 'block' in Qwen3ForCausalLM"
 
-This occurs when vLLM (used for rollout) loads a **Qwen3-based** model whose checkpoint uses different layer names than vLLM expects (e.g. HuggingFace uses `model.layers`, vLLM may look for `block`). It is a vLLM ↔ Qwen3 architecture/version mismatch.
+This occurs when **vLLM** (used for rollout) loads a Qwen3-based model whose checkpoint uses different layer names than vLLM expects. Alternatives to load the same checkpoints:
 
-- **Workarounds:**  
-  1. Use a **Qwen2-based** base model instead: set `AGENT_MODEL_REPO_ID` to a Qwen2 model (e.g. `Qwen/Qwen2.5-4B-Instruct` or your 4B Qwen2 checkpoint) in `.env` or the environment.  
-  2. Use a VERL/Docker image and vLLM version that explicitly support your Qwen3 checkpoint (check VERL/vLLM release notes and issues for Qwen3 support).  
-  3. If you must use this Qwen3 model, the fix is in the vLLM submodule (e.g. `train/verl` or the container’s vLLM); align layer names in the loader with the checkpoint or upgrade vLLM once support is added.
+- **1. Use SGLang for rollout (different loader):** Use the VERL image that includes SGLang (e.g. in `train/docker_run_verl.sh` set `IMAGE="verlai/verl:app-verl0.6-transformers4.56.1-sglang0.5.2-mcore0.13.0-te2.2"` or the latest sglang image), then run with `ROLLOUT_BACKEND=sglang bash train/scripts/openspiel-ppo-trainer.sh`. SGLang may load your Qwen3 checkpoint correctly.
+- **2. Upgrade vLLM:** Use a VERL Docker image with vLLM ≥ 0.8.5 (or whatever version adds support for your Qwen3 layout). Keep `ROLLOUT_BACKEND=vllm` (default).
+- **3. Use a Qwen2 base:** Set `AGENT_MODEL_REPO_ID=Qwen/Qwen2.5-4B-Instruct` (or another Qwen2 model) in `.env` so rollout uses a vLLM-compatible model until your stack supports Qwen3.
+- **4. Patch vLLM:** In the container or `train/verl` submodule, fix the Qwen3 loader so it maps `block` to the checkpoint’s layer names (e.g. `model.layers`).
 
 ---
 

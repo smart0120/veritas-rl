@@ -20,11 +20,14 @@
 #      +data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
 #      +data.custom_cls.config.adapter_config.max_random_steps=5
 #
-# 5. LoRA is default (VERL: fsdp/fsdp2 + vllm rollout; PEFT). Only adapter params trained; base frozen.
+# 5. LoRA is default (VERL: fsdp/fsdp2 + sglang rollout; PEFT). Only adapter params trained; base frozen.
 #    Saves only trainable LoRA adapters; use merge-ppo.sh then merge adapter into base if you want a full model.
 #    To full fine-tune (train all params): ENABLE_LORA=0 bash train/scripts/openspiel-ppo-trainer.sh
 #    Resume from adapter: LORA_ADAPTER_PATH=/path/to/adapter bash train/scripts/openspiel-ppo-trainer.sh
 #    Large model / low GPU: LAYERED_SUMMON=1 (sync LoRA to vLLM per-layer to reduce peak memory).
+#
+# 6. Rollout default is SGLang (use SGLang image in train/docker_run_verl.sh). To use vLLM instead:
+#    ROLLOUT_BACKEND=vllm bash train/scripts/openspiel-ppo-trainer.sh (and use the vLLM image).
 #
 # See docs/training.md and train/tools/openspiel_adapter.py.
 
@@ -55,7 +58,7 @@ export CUDA_LAUNCH_BLOCKING=0
 DATASET_PATH="${PWD}/train/tools/dataset-manager.py"
 REWARD_FN_PATH="${PWD}/train/tools/reward-manager.py"
 # Must be a HuggingFace repo_id (namespace/name). Do not use a local path or VERL/vLLM will fail with "Repo id must be in the form 'repo_name' or 'namespace/repo_name'".
-# Default: Qwen3-4B-Instruct-2507 (https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507). Requires vLLM>=0.8.5 for rollout.
+# Default: Sota26/Affine-38-... (Qwen3-based). If you see "no module or parameter named 'block' in Qwen3ForCausalLM", upgrade vLLM in the VERL container to >=0.8.5 or use a Qwen2 base (e.g. AGENT_MODEL_REPO_ID=Qwen/Qwen2.5-4B-Instruct).
 pure_agent_model_name="${AGENT_MODEL_REPO_ID:-Sota26/Affine-38-5HpqTamztoLsVqrHKv1aY4auSQKerdLBKHHTfvgebqGynTeq}"
 if [ "${pure_agent_model_name#/}" != "$pure_agent_model_name" ] || [ "${pure_agent_model_name#train/}" != "$pure_agent_model_name" ]; then
     echo "ERROR: actor_rollout_ref.model.path must be a HuggingFace repo_id (e.g. org/model-name), not a path. Got: $pure_agent_model_name"
@@ -112,7 +115,10 @@ if [ -n "$GAME_TYPES" ]; then
   echo "🎮 Restricting to game_types: ${GAME_TYPES}"
 fi
 
-# LoRA: required for VERL LoRA = strategy fsdp/fsdp2 + rollout.name=vllm + peft (lora_rank, lora_alpha, load_format=safetensors, target_modules).
+# Rollout backend: sglang (default) or vllm. SGLang loads Qwen3 checkpoints; use vllm with ROLLOUT_BACKEND=vllm if needed.
+ROLLOUT_BACKEND="${ROLLOUT_BACKEND:-sglang}"
+
+# LoRA: required for VERL LoRA = strategy fsdp/fsdp2 + rollout.name=sglang/vllm + peft (lora_rank, lora_alpha, load_format=safetensors, target_modules).
 # use_shm omitted: only safe for local model paths; this script uses HuggingFace repo_id (VERL would try copy_to_local and fail with FileNotFoundError).
 # Optional: layered_summon (large model / low GPU), lora_adapter_path (resume adapter).
 LORA_OVERRIDES=""
@@ -174,7 +180,7 @@ HYDRA_FULL_ERROR=1 WANDB_MODE=offline python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${ppo_micro_batch_size_per_gpu} \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${tensor_model_parallel_size} \
-    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.name=${ROLLOUT_BACKEND} \
     actor_rollout_ref.rollout.gpu_memory_utilization=${gpu_memory_utilization} \
     actor_rollout_ref.rollout.n=${rollout_sample_num} \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=${ppo_micro_batch_size_per_gpu} \

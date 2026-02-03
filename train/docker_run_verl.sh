@@ -1,10 +1,11 @@
 # ================================================
 # SELECT THE IMAGE
 # ================================================
+# SGLang image (default); rollout uses SGLang so Qwen3 checkpoints load correctly. Use vLLM image + ROLLOUT_BACKEND=vllm to use vLLM.
 # IMAGE="verlai/verl:ngc-th2.4.0-cu124-vllm0.6.3-te1.7-v0.0.4"
-# IMAGE="verlai/verl:app-verl0.6-transformers4.56.1-sglang0.5.2-mcore0.13.0-te2.2"
+IMAGE="verlai/verl:app-verl0.6-transformers4.56.1-sglang0.5.2-mcore0.13.0-te2.2"
+# IMAGE="verlai/verl:app-verl0.5-transformers4.55.4-vllm0.10.0-mcore0.13.0-te2.2"  # vLLM; then ROLLOUT_BACKEND=vllm
 # IMAGE="verlai/verl:base-verl0.6-cu128-cudnn9.8-torch2.8.0-fa2.7.4"
-IMAGE="verlai/verl:app-verl0.5-transformers4.55.4-vllm0.10.0-mcore0.13.0-te2.2"
 
 # ================================================
 # CHECK FOR .env FILE AND LOAD IT
