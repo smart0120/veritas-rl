@@ -127,7 +127,7 @@ to get reasonable throughput and headroom.
 **How to use `openspiel-ppo-trainer.sh`**
 
 1. **Prerequisites**
-   - **OpenSpiel** installed so `import pyspiel` works in the training environment (usually build from source: [OpenSpiel installation](https://github.com/google-deepmind/open_spiel#installation)). If you train inside the VERL Docker container, install OpenSpiel inside that image or mount a pre-built install.
+   - **OpenSpiel**: The script installs it if missing (`pip install open_spiel`). If that fails (e.g. no PyPI build for your platform), install from source: [OpenSpiel installation](https://github.com/google-deepmind/open_spiel#installation).
    - **HF_TOKEN** set (e.g. in `.env`) for model download.
    - Training is intended to run **inside the VERL Docker container**: from repo root run `cd train && ./docker_run_verl.sh`, then inside the container run the script.
 
@@ -144,12 +144,20 @@ to get reasonable throughput and headroom.
    - **`reward_mode`** — `outcome` (play out and use return) or `legal` (1 if legal else 0).
    - **`seed`** — base seed for reproducibility.
 
-   Example (more tasks per case, random rollout):
+   Example (more tasks per case, random rollout; use `+` prefix for adapter_config overrides):
    ```bash
    bash train/scripts/openspiel-ppo-trainer.sh \
-     data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
-     data.custom_cls.config.adapter_config.max_random_steps=5
+     +data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
+     +data.custom_cls.config.adapter_config.max_random_steps=5
    ```
+
+4. **LoRA is default** (only train adapter parameters; base stays frozen):
+   - VERL LoRA uses **strategy=fsdp/fsdp2** and **rollout.name=vllm** with HuggingFace PEFT. By default only LoRA adapters are trained; the base model is frozen so training a **new environment does not change** the base or previously trained adapters (per-env adapters can be saved and swapped).
+   - To full fine-tune (train all params): `ENABLE_LORA=0 bash train/scripts/openspiel-ppo-trainer.sh`
+   - Default: `lora_rank=32`, `lora_alpha=32`, `target_modules=all-linear`, `load_format=safetensors`, `use_shm=True`, and learning rate `6e-5`. Override via Hydra if needed (e.g. `+actor_rollout_ref.model.lora_rank=64`). Strategy: `FSDP_STRATEGY=fsdp2` to use fsdp2.
+   - **Resume from adapter** (multi-stage): `LORA_ADAPTER_PATH=/path/to/adapter bash train/scripts/openspiel-ppo-trainer.sh` (directory must contain `adapter_model.safetensors` and `adapter_config.json`).
+   - **Large model or limited GPU**: `LAYERED_SUMMON=1` enables per-layer sync of LoRA to vLLM to reduce peak memory (recommended for 70B+ or GPU < 48GB).
+   - After training, run `merge-ppo.sh`; if the checkpoint is LoRA-only, the merger may write `TARGET_DIR/lora_adapter/`. To get a single full model, merge the adapter into the base with `train/tools/merge_adapter_into_base.py` (e.g. `--base_model` = your base, `--adapter_model` = the merged output or `TARGET_DIR/lora_adapter`, `--output_dir` = where to save the full model).
 
 **Fixed tasks per case (e.g. board 2×2, 3×3, … 5×5)**
 
@@ -160,6 +168,17 @@ A **case** is one (game + config), e.g. hex 5×5, hex 7×7, go 9×9, breakthroug
 - In `train/tools/openspiel_adapter.py`, **`DEFAULT_CASES_BOARD_SIZES`** is an example list (hex 5/7/9, go 9/13, breakthrough 6×6/8×8, dots_and_boxes 3×3/4×4/5×5, clobber 5×5/6×6/7×7, othello, chess, checkers). Use it as a template or pass your own **`cases`** in adapter config.
 
 The adapter lives in `train/tools/openspiel_adapter.py` and is registered as env `openspiel`. Reward is routed by `extra_info["env"]` to the OpenSpiel adapter automatically.
+
+#### Merging PPO checkpoints (4.4B vs 4B param count)
+
+After training with several envs (e.g. OpenSpiel with multiple games), merging the actor checkpoint can show a **different parameter count** than your base model (e.g. **4.4B instead of 4B**). The displayed size comes from the **checkpoint’s saved config**, not from the merge script.
+
+- **Cause**: The actor checkpoint was saved with whatever config VERL wrote at checkpoint time; that config can differ from your base model (e.g. wrong or inflated dimensions).
+- **Fix**: The merge scripts now **align the merged model's config to the base model** after merging, so the reported param count matches the base. They use `BASE_MODEL` or `AGENT_MODEL_REPO_ID` (e.g. from `.env`); `merge-ppo.sh` defaults to the same base as `openspiel-ppo-trainer.sh`. No extra step needed if you use the same base for training and merge.
+- **Optional**: Inspect the actor config before merging (scripts print it via `show_model_config.py`). Use `CHECKPOINT_BASE` when you have an experiment subdir:  
+  `CHECKPOINT_BASE=train/artifacts/RL/checkpoints/openspiel-20250202-grpo bash train/scripts/merge.sh`
+- **Scripts**: `train/scripts/merge.sh` and `train/scripts/merge-ppo.sh` merge the PPO actor to a single HuggingFace model, then overwrite the merged `config.json` with the base model's config so param count matches the base (see **Fix** above).
+- **LoRA checkpoints** (default): The merger may write a LoRA adapter under `TARGET_DIR/lora_adapter/`. Use `train/tools/merge_adapter_into_base.py` to merge that adapter into the base and save a full model.
 
 ---
 

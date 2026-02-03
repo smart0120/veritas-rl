@@ -20,6 +20,12 @@
 #      +data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
 #      +data.custom_cls.config.adapter_config.max_random_steps=5
 #
+# 5. LoRA is default (VERL: fsdp/fsdp2 + vllm rollout; PEFT). Only adapter params trained; base frozen.
+#    Saves only trainable LoRA adapters; use merge-ppo.sh then merge adapter into base if you want a full model.
+#    To full fine-tune (train all params): ENABLE_LORA=0 bash train/scripts/openspiel-ppo-trainer.sh
+#    Resume from adapter: LORA_ADAPTER_PATH=/path/to/adapter bash train/scripts/openspiel-ppo-trainer.sh
+#    Large model / low GPU: LAYERED_SUMMON=1 (sync LoRA to vLLM per-layer to reduce peak memory).
+#
 # See docs/training.md and train/tools/openspiel_adapter.py.
 
 set -x
@@ -75,16 +81,27 @@ model_save_dir="train/artifacts/RL/checkpoints"
 mkdir -p ${model_save_dir}
 model_save_path=${model_save_dir}
 
+# --- Tuned for: 4B model, pre-trained on 2 envs, training 1 game, 2x H200, ~30 steps (ping-pong) per prompt ---
 kl_coef=0.001
 policy_learning_rate=6e-6
-rollout_sample_num=8
-train_batch_size=16
-ppo_mini_batch_size=8
-ppo_micro_batch_size_per_gpu=4
+rollout_sample_num=12
+# LoRA default: only train adapter params (base frozen); new env training does not affect pre-trained old env.
+ENABLE_LORA="${ENABLE_LORA:-1}"
+lora_rank=32
+lora_alpha=32
+# When LoRA enabled, use higher LR (VERL recommends ~1 order of magnitude)
+policy_learning_rate_lora=6e-5
+train_batch_size=32
+ppo_mini_batch_size=16
+ppo_micro_batch_size_per_gpu=8
 ppo_inner_epochs=1
-# 0.85 fits ~69 GiB free on 79 GiB GPUs; increase to 0.9 only if more memory is free. Override with GPU_MEMORY_UTILIZATION=0.9
-gpu_memory_utilization="${GPU_MEMORY_UTILIZATION:-0.5}"
-total_steps=30
+# 2x H200 (141GB each): use higher utilization; override with GPU_MEMORY_UTILIZATION if needed
+gpu_memory_utilization="${GPU_MEMORY_UTILIZATION:-0.85}"
+# ~30 user/assistant exchanges per task -> need room for long prompt + response
+max_prompt_length=12000
+max_response_length=4096
+# Single-game training: more steps to converge
+total_steps=100
 tensor_model_parallel_size=2
 gpu_count=2
 
@@ -93,6 +110,33 @@ export GAME_TYPES
 if [ -n "$GAME_TYPES" ]; then
   echo "🎮 Restricting to game_types: ${GAME_TYPES}"
 fi
+
+# LoRA: required for VERL LoRA = strategy fsdp/fsdp2 + rollout.name=vllm + peft (lora_rank, lora_alpha, load_format=safetensors, target_modules).
+# Optional: use_shm (faster load), layered_summon (large model / low GPU), lora_adapter_path (resume adapter).
+LORA_OVERRIDES=""
+FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
+if [ "$ENABLE_LORA" = "1" ]; then
+  echo "🔧 LoRA enabled (default): only training adapter params (rank=${lora_rank}, alpha=${lora_alpha}); base frozen — new env won't affect old"
+  LORA_OVERRIDES="trainer.strategy=${FSDP_STRATEGY} \
+    actor_rollout_ref.model.lora_rank=${lora_rank} \
+    actor_rollout_ref.model.lora_alpha=${lora_alpha} \
+    actor_rollout_ref.model.target_modules=all-linear \
+    actor_rollout_ref.model.use_shm=True \
+    actor_rollout_ref.rollout.load_format=safetensors"
+  if [ -n "${LORA_ADAPTER_PATH:-}" ]; then
+    echo "📂 Loading pretrained LoRA adapter from: $LORA_ADAPTER_PATH"
+    LORA_OVERRIDES="${LORA_OVERRIDES} actor_rollout_ref.model.lora_adapter_path=$LORA_ADAPTER_PATH"
+  fi
+  if [ "${LAYERED_SUMMON:-0}" = "1" ]; then
+    echo "📦 Layered summon enabled (recommended for 70B+ or GPU < 48GB)"
+    LORA_OVERRIDES="${LORA_OVERRIDES} actor_rollout_ref.rollout.layered_summon=True"
+  fi
+else
+  echo "⚠️ Full fine-tune (ENABLE_LORA=0): training all params; new env training will affect base model"
+fi
+# Use LoRA LR when LoRA enabled, else full fine-tune LR
+CURRENT_LR="${ENABLE_LORA:+$policy_learning_rate_lora}"
+CURRENT_LR="${CURRENT_LR:-$policy_learning_rate}"
 
 HYDRA_FULL_ERROR=1 WANDB_MODE=offline python3 -m verl.trainer.main_ppo \
     hydra.run.dir=train/outputs \
@@ -103,17 +147,18 @@ HYDRA_FULL_ERROR=1 WANDB_MODE=offline python3 -m verl.trainer.main_ppo \
     data.train_files="[]" \
     data.val_files="[]" \
     data.train_batch_size=${train_batch_size} \
-    data.max_prompt_length=9182 \
-    data.max_response_length=2048 \
+    data.max_prompt_length=${max_prompt_length} \
+    data.max_response_length=${max_response_length} \
     data.dataloader_num_workers=8 \
     actor_rollout_ref.model.path=${pure_agent_model_name} \
+    $LORA_OVERRIDES \
     data.truncation='left' \
     data.return_raw_chat=True \
     data.reward_fn_key="data_source" \
     data.shuffle=True \
     custom_reward_function.path="$REWARD_FN_PATH" \
     custom_reward_function.name="compute_score" \
-    actor_rollout_ref.actor.optim.lr=${policy_learning_rate} \
+    actor_rollout_ref.actor.optim.lr=${CURRENT_LR} \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=${ppo_mini_batch_size} \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=${ppo_micro_batch_size_per_gpu} \
