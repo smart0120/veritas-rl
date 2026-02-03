@@ -118,24 +118,24 @@ RL training uses reinforcement learning with the GRPO (Group Relative Policy Opt
    |--------|--------|--------|
    | **SFT** | `bash train/scripts/lgc-v2-SFT-trainer.sh` | Needs `train/parquet/train.parquet` and `val.parquet` (see [Dataset Generation](#dataset-generation) and [Convert to Parquet](#convert-to-parquet)). |
    | **RL (LGC-V2 GRPO)** | `bash train/scripts/lgc-v2-RL-GRPO-trainer.sh` | No dataset prep; dynamic env generates tasks on-the-fly. |
-   | **OpenSpiel PPO** | `bash train/scripts/openspiel-ppo-trainer.sh` | No dataset prep; requires OpenSpiel (`import pyspiel`) installed in the container. Fixed tasks per case (e.g. board sizes) via adapter config. |
+   | **OpenSpiel PPO** | `bash train/scripts/openspiel-ppo-trainer.sh` | No dataset prep; script installs OpenSpiel if missing (`pip install open_spiel`). Fixed tasks per case (e.g. board sizes) via adapter config. |
 
 3. **Optional overrides** (append to the script command or use env var for game_types). Examples:
    ```bash
    # OpenSpiel: train only on hex, go, chess (set GAME_TYPES as param)
    GAME_TYPES="hex,go,chess" bash train/scripts/openspiel-ppo-trainer.sh
 
-   # OpenSpiel: 200 tasks per case, 5 random rollout steps
+   # OpenSpiel: 200 tasks per case, 5 random rollout steps (use + for adapter overrides)
    bash train/scripts/openspiel-ppo-trainer.sh \
-     data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
-     data.custom_cls.config.adapter_config.max_random_steps=5
+     +data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
+     +data.custom_cls.config.adapter_config.max_random_steps=5
    ```
 
 4. **Monitor:** Checkpoints go to `train/artifacts/RL/checkpoints/` (RL) or `train/artifacts/checkpoints/` (SFT). Logs under `train/outputs/` and `train/artifacts/wandb/`.
 
 ### OpenSpiel PPO — Read me & examples
 
-**Read me:** OpenSpiel PPO trains a policy on board/card games (Hex, Go, Chess, etc.) with no dataset prep. Tasks are generated on-the-fly; you can restrict to specific games with `GAME_TYPES` or train on all. Requires OpenSpiel (`import pyspiel`) and `HF_TOKEN`. Run inside the VERL Docker container.
+**Read me:** OpenSpiel PPO trains a policy on board/card games (Hex, Go, Chess, etc.) with no dataset prep. Tasks are generated on-the-fly; you can restrict to specific games with `GAME_TYPES` or train on all. The script installs OpenSpiel if missing; requires `HF_TOKEN`. Run inside the VERL Docker container.
 
 **Examples** (run from repo root or from inside the container at `/workspace/veritas-rl`):
 
@@ -149,10 +149,10 @@ GAME_TYPES="hex,go,chess" bash train/scripts/openspiel-ppo-trainer.sh
 # Only Hex and Othello
 GAME_TYPES="hex,othello" bash train/scripts/openspiel-ppo-trainer.sh
 
-# More tasks per case (200) and 5 random rollout steps
+# More tasks per case (200) and 5 random rollout steps (use + for adapter overrides)
 bash train/scripts/openspiel-ppo-trainer.sh \
-  data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
-  data.custom_cls.config.adapter_config.max_random_steps=5
+  +data.custom_cls.config.adapter_config.num_tasks_per_case=200 \
+  +data.custom_cls.config.adapter_config.max_random_steps=5
 
 # Combine: only Go and Chess, 100 tasks per case
 GAME_TYPES="go,chess" bash train/scripts/openspiel-ppo-trainer.sh

@@ -3,11 +3,6 @@
 # Use after OpenSpiel PPO training (openspiel-ppo-trainer.sh). Merges the actor
 # checkpoint for the given global step into target_dir.
 #
-# NOTE: The merged model's parameter count comes from the checkpoint. If you see
-# a different size than your base (e.g. 4.4B instead of 4B), the actor checkpoint
-# was saved with that architecture—check what model was loaded at training time
-# (AGENT_MODEL_REPO_ID / actor_rollout_ref.model.path in openspiel-ppo-trainer.sh).
-#
 # HOW TO USE
 # ----------
 # 1. Run from repo root (or from VERL container at /workspace/veritas-rl):
@@ -20,12 +15,7 @@
 # 3. Optional: if checkpoints are under an experiment subdir (e.g. openspiel-20250202-grpo):
 #    CHECKPOINT_BASE=train/artifacts/RL/checkpoints/openspiel-20250202-grpo bash train/scripts/merge-ppo.sh
 #
-# 4. Optional: fix param count to match base (if merged model reports 4.4B instead of 4B):
-#    Set BASE_MODEL or AGENT_MODEL_REPO_ID (e.g. in .env) to the same base used for training, then:
-#    BASE_MODEL=org/your-4b-model bash train/scripts/merge-ppo.sh
-#    After merge, config in TARGET_DIR is overwritten with base config so param count matches.
-#
-# 5. LoRA checkpoints (LoRA is default in openspiel-ppo-trainer.sh): the merger may write adapter to
+# 4. LoRA checkpoints (LoRA is default in openspiel-ppo-trainer.sh): the merger may write adapter to
 #    TARGET_DIR/lora_adapter/ (adapter_model.safetensors, adapter_config.json). To get a full
 #    model: merge that adapter into base with train/tools/merge_adapter_into_base.py.
 #
@@ -45,9 +35,6 @@ export PYTHONPATH="${PROJECT_ROOT}/train/verl:${PYTHONPATH}"
 
 CHECKPOINT_BASE="${CHECKPOINT_BASE:-train/artifacts/RL/checkpoints}"
 TARGET_DIR="${TARGET_DIR:-train/merged_model_ppo}"
-# Base model used at training (same as openspiel-ppo-trainer.sh). Align merged config to this so param count matches.
-DEFAULT_BASE="Sota26/Affine-38-5HpqTamztoLsVqrHKv1aY4auSQKerdLBKHHTfvgebqGynTeq"
-BASE_MODEL="${BASE_MODEL:-${AGENT_MODEL_REPO_ID:-$DEFAULT_BASE}}"
 
 # Resolve GLOBAL_STEP: use env, else latest from latest_checkpointed_iteration.txt, else 30.
 if [ -n "$GLOBAL_STEP" ]; then
@@ -91,13 +78,5 @@ python3 -m verl.model_merger merge \
     --backend fsdp \
     --local_dir "$LOCAL_DIR" \
     --target_dir "$TARGET_DIR"
-
-if [ -n "$BASE_MODEL" ]; then
-    echo "Aligning merged config to base model (fix param count): $BASE_MODEL"
-    python3 "${PROJECT_ROOT}/train/tools/align_merged_config_to_base.py" \
-        --base_model "$BASE_MODEL" \
-        --target_dir "$TARGET_DIR" \
-        --trust_remote_code
-fi
 
 echo "Done. Merged model saved to: $TARGET_DIR"

@@ -169,16 +169,23 @@ A **case** is one (game + config), e.g. hex 5×5, hex 7×7, go 9×9, breakthroug
 
 The adapter lives in `train/tools/openspiel_adapter.py` and is registered as env `openspiel`. Reward is routed by `extra_info["env"]` to the OpenSpiel adapter automatically.
 
-#### Merging PPO checkpoints (4.4B vs 4B param count)
+#### Merging PPO checkpoints
 
-After training with several envs (e.g. OpenSpiel with multiple games), merging the actor checkpoint can show a **different parameter count** than your base model (e.g. **4.4B instead of 4B**). The displayed size comes from the **checkpoint’s saved config**, not from the merge script.
+After training, merge the actor checkpoint to a single HuggingFace model. The merged model keeps its **own** `config.json` (from the checkpoint); it is not overwritten with the base/agent model config.
 
-- **Cause**: The actor checkpoint was saved with whatever config VERL wrote at checkpoint time; that config can differ from your base model (e.g. wrong or inflated dimensions).
-- **Fix**: The merge scripts now **align the merged model's config to the base model** after merging, so the reported param count matches the base. They use `BASE_MODEL` or `AGENT_MODEL_REPO_ID` (e.g. from `.env`); `merge-ppo.sh` defaults to the same base as `openspiel-ppo-trainer.sh`. No extra step needed if you use the same base for training and merge.
-- **Optional**: Inspect the actor config before merging (scripts print it via `show_model_config.py`). Use `CHECKPOINT_BASE` when you have an experiment subdir:  
+- **Scripts**: `train/scripts/merge.sh` and `train/scripts/merge-ppo.sh` merge the PPO actor to a single HuggingFace model. Use `CHECKPOINT_BASE` when you have an experiment subdir:  
   `CHECKPOINT_BASE=train/artifacts/RL/checkpoints/openspiel-20250202-grpo bash train/scripts/merge.sh`
-- **Scripts**: `train/scripts/merge.sh` and `train/scripts/merge-ppo.sh` merge the PPO actor to a single HuggingFace model, then overwrite the merged `config.json` with the base model's config so param count matches the base (see **Fix** above).
+- **Optional**: Inspect the actor config before merging (scripts print it via `show_model_config.py`).
 - **LoRA checkpoints** (default): The merger may write a LoRA adapter under `TARGET_DIR/lora_adapter/`. Use `train/tools/merge_adapter_into_base.py` to merge that adapter into the base and save a full model.
+
+#### ValueError: "There is no module or parameter named 'block' in Qwen3ForCausalLM"
+
+This occurs when vLLM (used for rollout) loads a **Qwen3-based** model whose checkpoint uses different layer names than vLLM expects (e.g. HuggingFace uses `model.layers`, vLLM may look for `block`). It is a vLLM ↔ Qwen3 architecture/version mismatch.
+
+- **Workarounds:**  
+  1. Use a **Qwen2-based** base model instead: set `AGENT_MODEL_REPO_ID` to a Qwen2 model (e.g. `Qwen/Qwen2.5-4B-Instruct` or your 4B Qwen2 checkpoint) in `.env` or the environment.  
+  2. Use a VERL/Docker image and vLLM version that explicitly support your Qwen3 checkpoint (check VERL/vLLM release notes and issues for Qwen3 support).  
+  3. If you must use this Qwen3 model, the fix is in the vLLM submodule (e.g. `train/verl` or the container’s vLLM); align layer names in the loader with the checkpoint or upgrade vLLM once support is added.
 
 ---
 

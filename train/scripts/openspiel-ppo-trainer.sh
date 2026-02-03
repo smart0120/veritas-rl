@@ -55,6 +55,7 @@ export CUDA_LAUNCH_BLOCKING=0
 DATASET_PATH="${PWD}/train/tools/dataset-manager.py"
 REWARD_FN_PATH="${PWD}/train/tools/reward-manager.py"
 # Must be a HuggingFace repo_id (namespace/name). Do not use a local path or VERL/vLLM will fail with "Repo id must be in the form 'repo_name' or 'namespace/repo_name'".
+# Default is Qwen3-based; if you see "no module or parameter named 'block' in Qwen3ForCausalLM", use a Qwen2 model (e.g. Qwen/Qwen2.5-4B-Instruct) or see docs/training.md.
 pure_agent_model_name="${AGENT_MODEL_REPO_ID:-Sota26/Affine-38-5HpqTamztoLsVqrHKv1aY4auSQKerdLBKHHTfvgebqGynTeq}"
 if [ "${pure_agent_model_name#/}" != "$pure_agent_model_name" ] || [ "${pure_agent_model_name#train/}" != "$pure_agent_model_name" ]; then
     echo "ERROR: actor_rollout_ref.model.path must be a HuggingFace repo_id (e.g. org/model-name), not a path. Got: $pure_agent_model_name"
@@ -112,16 +113,16 @@ if [ -n "$GAME_TYPES" ]; then
 fi
 
 # LoRA: required for VERL LoRA = strategy fsdp/fsdp2 + rollout.name=vllm + peft (lora_rank, lora_alpha, load_format=safetensors, target_modules).
-# Optional: use_shm (faster load), layered_summon (large model / low GPU), lora_adapter_path (resume adapter).
+# use_shm omitted: only safe for local model paths; this script uses HuggingFace repo_id (VERL would try copy_to_local and fail with FileNotFoundError).
+# Optional: layered_summon (large model / low GPU), lora_adapter_path (resume adapter).
 LORA_OVERRIDES=""
 FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
 if [ "$ENABLE_LORA" = "1" ]; then
   echo "🔧 LoRA enabled (default): only training adapter params (rank=${lora_rank}, alpha=${lora_alpha}); base frozen — new env won't affect old"
-  LORA_OVERRIDES="trainer.strategy=${FSDP_STRATEGY} \
+  LORA_OVERRIDES="+trainer.strategy=${FSDP_STRATEGY} \
     actor_rollout_ref.model.lora_rank=${lora_rank} \
     actor_rollout_ref.model.lora_alpha=${lora_alpha} \
     actor_rollout_ref.model.target_modules=all-linear \
-    actor_rollout_ref.model.use_shm=True \
     actor_rollout_ref.rollout.load_format=safetensors"
   if [ -n "${LORA_ADAPTER_PATH:-}" ]; then
     echo "📂 Loading pretrained LoRA adapter from: $LORA_ADAPTER_PATH"
