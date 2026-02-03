@@ -1,9 +1,12 @@
 # ================================================
 # SELECT THE IMAGE
 # ================================================
-# SGLang image (default); rollout uses SGLang so Qwen3 checkpoints load correctly. Use vLLM image + ROLLOUT_BACKEND=vllm to use vLLM.
+# SGLang image (default); rollout uses SGLang so Qwen3 checkpoints load correctly.
+# If the image lacks the sglang package, openspiel-ppo-trainer.sh will try to pip install sglang[all]==0.5.2 on first run.
+# See https://verl.readthedocs.io/en/latest/workers/sglang_worker.html and https://github.com/volcengine/verl (requirements_sglang.txt).
 # IMAGE="verlai/verl:ngc-th2.4.0-cu124-vllm0.6.3-te1.7-v0.0.4"
 IMAGE="verlai/verl:app-verl0.6-transformers4.56.1-sglang0.5.2-mcore0.13.0-te2.2"
+# IMAGE="verlai/verl:sgl055.latest"  # alternative SGLang tag from VERL docs
 # IMAGE="verlai/verl:app-verl0.5-transformers4.55.4-vllm0.10.0-mcore0.13.0-te2.2"  # vLLM; then ROLLOUT_BACKEND=vllm
 # IMAGE="verlai/verl:base-verl0.6-cu128-cudnn9.8-torch2.8.0-fa2.7.4"
 

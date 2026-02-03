@@ -28,6 +28,8 @@
 #
 # 6. Rollout default is SGLang (use SGLang image in train/docker_run_verl.sh). To use vLLM instead:
 #    ROLLOUT_BACKEND=vllm bash train/scripts/openspiel-ppo-trainer.sh (and use the vLLM image).
+#    If you see "ModuleNotFoundError: No module named 'sglang'", you are in the vLLM image—stop the container
+#    (docker stop verl; docker rm verl), then start a new one with train/docker_run_verl.sh so it uses the SGLang image.
 #
 # See docs/training.md and train/tools/openspiel_adapter.py.
 
@@ -115,8 +117,16 @@ if [ -n "$GAME_TYPES" ]; then
   echo "🎮 Restricting to game_types: ${GAME_TYPES}"
 fi
 
-# Rollout backend: sglang (default) or vllm. SGLang loads Qwen3 checkpoints; use vllm with ROLLOUT_BACKEND=vllm if needed.
+# Rollout backend: sglang (default) or vllm. Requires the matching VERL image in train/docker_run_verl.sh (SGLang image for sglang).
 ROLLOUT_BACKEND="${ROLLOUT_BACKEND:-sglang}"
+
+# Ensure SGLang is installed when using sglang rollout (VERL needs sglang[all]==0.5.2). Install in container if image lacks it.
+if [ "$ROLLOUT_BACKEND" = "sglang" ]; then
+  if ! python3 -c "import sglang.srt.entrypoints.engine" 2>/dev/null; then
+    echo "Installing sglang (required for SGLang rollout; VERL uses sglang[all]==0.5.2)..."
+    pip install "sglang[all]==0.5.2" || { echo "ERROR: Failed to install sglang. Use the SGLang VERL image (train/docker_run_verl.sh) or set ROLLOUT_BACKEND=vllm."; exit 1; }
+  fi
+fi
 
 # LoRA: required for VERL LoRA = strategy fsdp/fsdp2 + rollout.name=sglang/vllm + peft (lora_rank, lora_alpha, load_format=safetensors, target_modules).
 # use_shm omitted: only safe for local model paths; this script uses HuggingFace repo_id (VERL would try copy_to_local and fail with FileNotFoundError).
