@@ -55,8 +55,8 @@ export CUDA_LAUNCH_BLOCKING=0
 DATASET_PATH="${PWD}/train/tools/dataset-manager.py"
 REWARD_FN_PATH="${PWD}/train/tools/reward-manager.py"
 # Must be a HuggingFace repo_id (namespace/name). Do not use a local path or VERL/vLLM will fail with "Repo id must be in the form 'repo_name' or 'namespace/repo_name'".
-# Default: Qwen2.5-4B (vLLM-compatible). Qwen3 models (e.g. Sota26/Affine-38-...) can trigger "no module or parameter named 'block'" in vLLM—use a Qwen2 base or see docs/training.md.
-pure_agent_model_name="${AGENT_MODEL_REPO_ID:-Qwen/Qwen2.5-4B-Instruct}"
+# Default: Qwen3-4B-Instruct-2507 (https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507). Requires vLLM>=0.8.5 for rollout.
+pure_agent_model_name="${AGENT_MODEL_REPO_ID:-Sota26/Affine-38-5HpqTamztoLsVqrHKv1aY4auSQKerdLBKHHTfvgebqGynTeq}"
 if [ "${pure_agent_model_name#/}" != "$pure_agent_model_name" ] || [ "${pure_agent_model_name#train/}" != "$pure_agent_model_name" ]; then
     echo "ERROR: actor_rollout_ref.model.path must be a HuggingFace repo_id (e.g. org/model-name), not a path. Got: $pure_agent_model_name"
     echo "Set AGENT_MODEL_REPO_ID=org/model-name in .env or the environment and run again."
