@@ -175,7 +175,6 @@ After training, merge the actor checkpoint to a single HuggingFace model. The me
 
 - **Scripts**: `train/scripts/merge.sh` and `train/scripts/merge-ppo.sh` merge the PPO actor to a single HuggingFace model. Use `CHECKPOINT_BASE` when you have an experiment subdir:  
   `CHECKPOINT_BASE=train/artifacts/RL/checkpoints/openspiel-20250202-grpo bash train/scripts/merge.sh`
-- **Optional**: Inspect the actor config before merging (scripts print it via `show_model_config.py`).
 - **LoRA checkpoints** (default): The merger may write a LoRA adapter under `TARGET_DIR/lora_adapter/`. Use `train/tools/merge_adapter_into_base.py` to merge that adapter into the base and save a full model.
 
 #### ValueError: "There is no module or parameter named 'block' in Qwen3ForCausalLM"

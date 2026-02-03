@@ -68,11 +68,6 @@ fi
 
 mkdir -p "$TARGET_DIR"
 echo "Merging PPO actor checkpoint (step $GLOBAL_STEP): $LOCAL_DIR -> $TARGET_DIR"
-# Verify actor config (param count / size comes from here; run show_model_config to spot 4.4B vs 4B)
-if [ -f "${LOCAL_DIR}/huggingface/config.json" ]; then
-    echo "Actor config (param count comes from here):"
-    python3 "${PROJECT_ROOT}/train/tools/show_model_config.py" "${LOCAL_DIR}/huggingface" 2>/dev/null || true
-fi
 
 python3 -m verl.model_merger merge \
     --backend fsdp \
