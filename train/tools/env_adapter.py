@@ -194,4 +194,22 @@ def get_env_adapter(env: str, config: Optional[Dict[str, Any]] = None) -> EnvAda
             seed=config.get("seed"),
         )
 
+    if env in {"swe-synth", "swe_synth", "swesynth"}:
+        from swe_synth_adapter import SweSynthAdapter
+        task_ids = config.get("task_ids")
+        task_id_range = config.get("task_id_range")
+        if task_id_range and isinstance(task_id_range, (list, tuple)) and len(task_id_range) >= 2:
+            task_id_range = (int(task_id_range[0]), int(task_id_range[1]))
+        else:
+            task_id_range = None
+        return SweSynthAdapter(
+            task_ids=task_ids,
+            task_id_range=task_id_range,
+            dataset_name=str(config.get("dataset_name", "princeton-nlp/SWE-bench_Lite")),
+            split=str(config.get("split", "test")),
+            cache_dir=config.get("cache_dir") or None,
+            use_cache_only=bool(config.get("use_cache_only", False)),
+            seed=config.get("seed"),
+        )
+
     raise ValueError(f"Unknown env adapter: {env}")

@@ -1,7 +1,5 @@
 # Merge an adapter (LoRA or full SFT) into a base model.
 #
-# Default adapter: swesynth/Qwen2.5-Coder-14B-Instruct-SFT-3k-Moatless-Traj-SWE-Synth (7B LoRA).
-# Default base:    Qwen/Qwen2.5-Coder-7B-Instruct (matches that adapter).
 #
 # HOW TO USE
 # ----------

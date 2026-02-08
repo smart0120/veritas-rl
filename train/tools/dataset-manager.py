@@ -58,10 +58,13 @@ class DynamicEnvDataset(Dataset):
         self.env = self.config.get("env", "lgc-v2")
         self.adapter_config = self.config.get("adapter_config", {}) or {}
         self.adapter = get_env_adapter(self.env, config=self.adapter_config)
-        # OpenSpiel: fixed number of tasks per game (total = num_games * num_tasks_per_game)
+        # OpenSpiel / SWE-SYNTH: fixed number of tasks (total = get_total_fixed_tasks())
         self._openspiel_total_tasks = None
-        if str(self.env).lower() == "openspiel" and hasattr(self.adapter, "get_total_fixed_tasks"):
+        self._fixed_task_adapter = None  # adapter that has get_total_fixed_tasks + get_task_id_for_index
+        if hasattr(self.adapter, "get_total_fixed_tasks"):
             self._openspiel_total_tasks = self.adapter.get_total_fixed_tasks()
+            if hasattr(self.adapter, "get_task_id_for_index"):
+                self._fixed_task_adapter = self.adapter
 
         # Configuration
         self.prompt_key = self.config.get("prompt_key", "prompt")
@@ -166,7 +169,15 @@ class DynamicEnvDataset(Dataset):
             task_id = base_id + int(self.rng.randint(0, range_width - 1))
             return int(task_id), str(task_type)
 
-        # OpenSpiel: task_id in [0, total_fixed_tasks); shuffle or cycle by index
+        # OpenSpiel / SWE-SYNTH: fixed task set; use adapter.get_task_id_for_index or task_id in [0, total)
+        if self._fixed_task_adapter is not None and self._openspiel_total_tasks is not None and self._openspiel_total_tasks > 0:
+            if self.shuffle and self.seed is not None:
+                self.rng.seed(self.seed + index)
+                idx = self.rng.randint(0, self._openspiel_total_tasks - 1)
+            else:
+                idx = index % self._openspiel_total_tasks
+            task_id = self._fixed_task_adapter.get_task_id_for_index(idx)
+            return int(task_id), str(self.env)
         if self._openspiel_total_tasks is not None and self._openspiel_total_tasks > 0:
             total = self._openspiel_total_tasks
             if self.shuffle and self.seed is not None:

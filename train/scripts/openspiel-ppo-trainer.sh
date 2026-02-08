@@ -6,6 +6,7 @@
 #    - HF_TOKEN set (e.g. in .env) for model download.
 #    - Model: use HuggingFace repo_id only (e.g. rhuanmatias/trained-top-sn120). Optional: set AGENT_MODEL_REPO_ID in .env. Do not use a local path.
 #    - GPU: if you see "Free memory ... less than desired GPU memory utilization", set GPU_MEMORY_UTILIZATION=0.85 (default) or lower (e.g. 0.8).
+#    - If you see "CUDA Error: out of memory" during vLLM KV cache wake-up, lower GPU_MEMORY_UTILIZATION (e.g. 0.7) or ensure max_model_len/max_num_batched_tokens are not too large (default: prompt+response length).
 #    - OpenSpiel is installed by this script if missing (pip install open_spiel).
 #    - Run inside the VERL Docker container: from repo root run "cd train && ./docker_run_verl.sh", then run this script.
 #
@@ -62,7 +63,7 @@ DATASET_PATH="${PWD}/train/tools/dataset-manager.py"
 REWARD_FN_PATH="${PWD}/train/tools/reward-manager.py"
 # Must be a HuggingFace repo_id (namespace/name). Do not use a local path or VERL/vLLM will fail with "Repo id must be in the form 'repo_name' or 'namespace/repo_name'".
 # Default: Sota26/Affine-38-... (Qwen3-based). If you see "no module or parameter named 'block' in Qwen3ForCausalLM", upgrade vLLM in the VERL container to >=0.8.5 or use a Qwen2 base (e.g. AGENT_MODEL_REPO_ID=Qwen/Qwen2.5-4B-Instruct).
-pure_agent_model_name="${AGENT_MODEL_REPO_ID:-Sota26/Affine-38-5HpqTamztoLsVqrHKv1aY4auSQKerdLBKHHTfvgebqGynTeq}"
+pure_agent_model_name="${AGENT_MODEL_REPO_ID:-micleowen02/affine-crash-5CVLTzAwVNuFE6dsio9GDaZbVSGR67uHsk3BUEWCWPX7HLXH}"
 if [ "${pure_agent_model_name#/}" != "$pure_agent_model_name" ] || [ "${pure_agent_model_name#train/}" != "$pure_agent_model_name" ]; then
     echo "ERROR: actor_rollout_ref.model.path must be a HuggingFace repo_id (e.g. org/model-name), not a path. Got: $pure_agent_model_name"
     echo "Set AGENT_MODEL_REPO_ID=org/model-name in .env or the environment and run again."
@@ -77,12 +78,17 @@ fi
 
 DATE=$(date +%Y%m%d)
 TIME=$(date +%Y%m%d_%H%M%S)
-if [ -z "$WANDB_API_KEY" ] && [ "$WANDB_MODE" != "offline" ]; then
-    echo "WARNING: WANDB_API_KEY not set. Use WANDB_MODE=offline for local logging."
+# W&B: set WANDB_API_KEY in .env for online sync; otherwise logs go to train/artifacts/wandb/ (offline).
+if [ -n "$WANDB_API_KEY" ]; then
+    export WANDB_MODE="${WANDB_MODE:-run}"
+    echo "W&B: online (WANDB_API_KEY set). Project: openspiel-grpo"
+else
+    export WANDB_MODE="${WANDB_MODE:-offline}"
+    echo "W&B: offline (WANDB_API_KEY not set). Logs under train/artifacts/wandb/"
 fi
-export WANDB_DIR=train/artifacts/wandb/openspiel-${DATE}
-export WANDB_PROJECT=openspiel-grpo
-export WANDB_EXP=openspiel-${TIME}-grpo
+export WANDB_DIR="${WANDB_DIR:-train/artifacts/wandb/openspiel-${DATE}}"
+export WANDB_PROJECT="${WANDB_PROJECT:-openspiel-grpo}"
+export WANDB_EXP="${WANDB_EXP:-openspiel-${TIME}-grpo}"
 
 model_save_dir="train/artifacts/RL/checkpoints"
 mkdir -p ${model_save_dir}
@@ -103,14 +109,17 @@ ppo_mini_batch_size=16
 ppo_micro_batch_size_per_gpu=8
 ppo_inner_epochs=1
 # 2x H200 (141GB each): use higher utilization; override with GPU_MEMORY_UTILIZATION if needed
-gpu_memory_utilization="${GPU_MEMORY_UTILIZATION:-0.85}"
+gpu_memory_utilization="${GPU_MEMORY_UTILIZATION:-0.6}"
 # ~30 user/assistant exchanges per task -> need room for long prompt + response
 max_prompt_length=12000
 max_response_length=4096
+# vLLM KV cache: keep close to prompt+response to avoid OOM. 65536 needs multi-GPU or very high VRAM.
+max_model_len=$((max_prompt_length + max_response_length))
+max_num_batched_tokens=${max_num_batched_tokens:-$max_model_len}
 # Single-game training: more steps to converge
-total_steps=100
-tensor_model_parallel_size=2
-gpu_count=2
+total_steps=10
+tensor_model_parallel_size=1
+gpu_count=1
 
 GAME_TYPES="${GAME_TYPES:-}"
 export GAME_TYPES
@@ -130,16 +139,21 @@ if [ "$ROLLOUT_BACKEND" = "sglang" ]; then
 fi
 
 # LoRA: required for VERL LoRA = strategy fsdp/fsdp2 + rollout.name=vllm/sglang + peft (lora_rank, lora_alpha, load_format=safetensors, target_modules).
+# Exclude lm_head and embed_tokens so merged model stays same size as base (4B); avoids 4.4B output and keeps pretrained envs compatible.
+# Override: LORA_EXCLUDE_MODULES="" to not exclude anything; or e.g. LORA_EXCLUDE_MODULES="[lm_head]" to exclude only lm_head.
+LORA_EXCLUDE_MODULES="${LORA_EXCLUDE_MODULES:-[lm_head,embed_tokens]}"
 # use_shm omitted: only safe for local model paths; this script uses HuggingFace repo_id (VERL would try copy_to_local and fail with FileNotFoundError).
 # Optional: layered_summon (large model / low GPU), lora_adapter_path (resume adapter).
 LORA_OVERRIDES=""
 FSDP_STRATEGY="${FSDP_STRATEGY:-fsdp}"
 if [ "$ENABLE_LORA" = "1" ]; then
   echo "🔧 LoRA enabled (default): only training adapter params (rank=${lora_rank}, alpha=${lora_alpha}); base frozen — new env won't affect old"
+  echo "   Excluding from LoRA (keeps merged model 4B): ${LORA_EXCLUDE_MODULES}"
   LORA_OVERRIDES="+trainer.strategy=${FSDP_STRATEGY} \
     actor_rollout_ref.model.lora_rank=${lora_rank} \
     actor_rollout_ref.model.lora_alpha=${lora_alpha} \
     actor_rollout_ref.model.target_modules=all-linear \
+    actor_rollout_ref.model.exclude_modules=${LORA_EXCLUDE_MODULES} \
     actor_rollout_ref.rollout.load_format=safetensors"
   if [ -n "${LORA_ADAPTER_PATH:-}" ]; then
     echo "📂 Loading pretrained LoRA adapter from: $LORA_ADAPTER_PATH"
@@ -156,7 +170,7 @@ fi
 CURRENT_LR="${ENABLE_LORA:+$policy_learning_rate_lora}"
 CURRENT_LR="${CURRENT_LR:-$policy_learning_rate}"
 
-HYDRA_FULL_ERROR=1 WANDB_MODE=offline python3 -m verl.trainer.main_ppo \
+HYDRA_FULL_ERROR=1 python3 -m verl.trainer.main_ppo \
     hydra.run.dir=train/outputs \
     algorithm.adv_estimator=grpo \
     data.filter_overlong_prompts=True \
@@ -181,8 +195,8 @@ HYDRA_FULL_ERROR=1 WANDB_MODE=offline python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.ppo_mini_batch_size=${ppo_mini_batch_size} \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=${ppo_micro_batch_size_per_gpu} \
     actor_rollout_ref.actor.use_kl_loss=True \
-    actor_rollout_ref.rollout.max_model_len=65536 \
-    actor_rollout_ref.rollout.max_num_batched_tokens=65536 \
+    actor_rollout_ref.rollout.max_model_len=${max_model_len} \
+    actor_rollout_ref.rollout.max_num_batched_tokens=${max_num_batched_tokens} \
     actor_rollout_ref.actor.kl_loss_coef=${kl_coef} \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
