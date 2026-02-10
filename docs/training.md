@@ -84,9 +84,25 @@ Checkpoints are written by `FSDPSFTTrainer.save_checkpoint` under:
 - These directories are automatically ignored by `.gitignore`
 - Hydra outputs are configured to save under `train/outputs/` to keep training artifacts organized in the `train/` folder
 
-If you prefer to keep SFT parquet separate from RL parquet, generate to a different folder
-like `train/parquet_sft/` and edit `dataset_path` in `lgc-v2-SFT-trainer.sh` and the
-`data.{train,val}_files` overrides accordingly.
+SFT supports **multiple train parquet files** and **.env-driven params**. In `.env` (or the environment) you can set: `AGENT_MODEL_REPO_ID`, `SFT_TRAIN_FILES` (comma-separated), `SFT_VAL_FILES`, `SFT_PARQUET_DIR`, `WANDB_PROJECT`, `WANDB_EXP`, `SFT_TRAIN_BATCH_SIZE`, `SFT_MAX_LENGTH`, `SFT_TOTAL_EPOCHS`, `GPU_COUNT`, `SFT_SAVE_DIR`, `SFT_LR`, **`SFT_PROMPT_KEY`** and **`SFT_RESPONSE_KEY`** (parquet column names for prompt and response), **`SFT_LORA_RANK`**, **`SFT_LORA_ALPHA`**, **`SFT_LORA_TARGET_MODULES`** (LoRA mode: set `SFT_LORA_RANK=16` and `SFT_LORA_ALPHA=32` to train only low-rank adapters and reduce overfitting), **`SFT_MAX_CKPT_TO_KEEP`** (keep only the last N checkpoints to save disk; e.g. `SFT_MAX_CKPT_TO_KEEP=3`; unset = keep all), etc. See the header of `train/scripts/lgc-v2-SFT-trainer.sh` for the full list. **SWE-synth style** parquet (e.g. `instance_id`, `messages`, `model_patch`, `run_name`): use `SFT_PROMPT_KEY=problem_statement` (or a column that holds the prompt string) and `SFT_RESPONSE_KEY=model_patch`; `instance_id` and `run_name` may be present but are not used for the loss. If your prompt is in a list column like `messages`, add a string column (e.g. formatted problem statement) and point `SFT_PROMPT_KEY` at it.
+
+**SFT with SWE-Synth Moatless SFT Trajectories (HuggingFace):** The dataset [swesynth/SWE-Synth_Moatless-SFT-Trajectories](https://huggingface.co/datasets/swesynth/SWE-Synth_Moatless-SFT-Trajectories) has columns `instance_id`, `messages` (list of chat dicts), `model_patch`, and `run_name`. To train on it without manual conversion, set **`SFT_HF_DATASET`**; the script will run `data_processing/convert_swe_synth_sft.py` to build parquet with `prompt` (from `messages`) and `response` (from `model_patch`), then train. Example (from repo root):
+
+```bash
+export SFT_HF_DATASET=swesynth/SWE-Synth_Moatless-SFT-Trajectories
+export SFT_VAL_RATIO=0.1
+bash train/scripts/lgc-v2-SFT-trainer.sh
+```
+
+Optional: `SFT_VAL_RATIO` (default `0.1`) controls the validation fraction; `SFT_PARQUET_DIR` (default `train/parquet`) is where the converted parquet files are written. To convert only (no training), run:
+
+```bash
+python data_processing/convert_swe_synth_sft.py \
+  --dataset swesynth/SWE-Synth_Moatless-SFT-Trajectories \
+  --output-dir train/parquet --val-ratio 0.1
+```
+
+Then set `SFT_TRAIN_FILES=train/parquet/swe_synth_sft_train.parquet`, `SFT_VAL_FILES=train/parquet/swe_synth_sft_val.parquet`, `SFT_PROMPT_KEY=prompt`, `SFT_RESPONSE_KEY=response` and run the SFT script as usual.
 
 ---
 
