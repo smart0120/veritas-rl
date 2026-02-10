@@ -29,18 +29,34 @@ from pathlib import Path
 from typing import Any
 
 
-def messages_to_prompt(messages: list[dict[str, Any]]) -> str:
-    """Turn a list of chat messages into a single prompt string (for single-turn SFT)."""
-    parts = []
-    for m in messages:
+def _normalize_message(m: Any) -> tuple[str, str]:
+    """Extract (role, content) from a message that may be a dict or a list."""
+    if isinstance(m, dict):
         role = m.get("role", "unknown")
         content = m.get("content")
-        if content is None:
-            content = ""
-        if isinstance(content, list):
-            content = " ".join(
-                (str(block.get("text", "")) for block in content if isinstance(block, dict))
-            )
+    elif isinstance(m, (list, tuple)) and len(m) >= 2:
+        role = str(m[0]) if m[0] is not None else "unknown"
+        content = m[1]
+    elif isinstance(m, (list, tuple)) and len(m) == 1:
+        role = "unknown"
+        content = m[0]
+    else:
+        role = "unknown"
+        content = m if m is not None else ""
+    if content is None:
+        content = ""
+    if isinstance(content, list):
+        content = " ".join(
+            (str(block.get("text", "")) for block in content if isinstance(block, dict))
+        )
+    return role, str(content)
+
+
+def messages_to_prompt(messages: list[Any]) -> str:
+    """Turn a list of chat messages (dicts or lists) into a single prompt string (for single-turn SFT)."""
+    parts = []
+    for m in messages:
+        role, content = _normalize_message(m)
         parts.append(f"[{role}]\n{content}")
     return "\n\n".join(parts)
 
