@@ -7,6 +7,9 @@ Schema: instance_id, messages (list of {role, content, tool_calls?}), model_patc
 Output parquet has columns: prompt (string, built from messages), response (from model_patch),
 and optionally instance_id, run_name. Use with SFT_PROMPT_KEY=prompt, SFT_RESPONSE_KEY=response.
 
+Prompt and response are truncated by character count (--max-chars-prompt, --max-chars-response)
+so tokenized length stays under the model limit and the 3rd-party trainer does not see oversized sequences.
+
 Usage:
   python data_processing/convert_swe_synth_sft.py \\
     --dataset swesynth/SWE-Synth_Moatless-SFT-Trajectories \\
@@ -105,6 +108,18 @@ def main() -> int:
         default=42,
         help="Random seed for train/val split",
     )
+    parser.add_argument(
+        "--max-chars-prompt",
+        type=int,
+        default=32768,
+        help="Max characters per prompt (truncate from end). ~4 chars/token -> 8192 tokens. 0 = no limit.",
+    )
+    parser.add_argument(
+        "--max-chars-response",
+        type=int,
+        default=32768,
+        help="Max characters per response (truncate from end). 0 = no limit.",
+    )
     args = parser.parse_args()
 
     try:
@@ -126,6 +141,9 @@ def main() -> int:
     n = len(ds)
     print(f"Converting {n} rows...")
 
+    max_prompt = args.max_chars_prompt or None
+    max_resp = args.max_chars_response or None
+
     prompts = []
     responses = []
     instance_ids = []
@@ -135,8 +153,14 @@ def main() -> int:
         msgs = row.get("messages")
         if not msgs:
             msgs = []
-        prompts.append(messages_to_prompt(msgs))
-        responses.append(row.get("model_patch") or "")
+        p = messages_to_prompt(msgs)
+        if max_prompt and len(p) > max_prompt:
+            p = p[:max_prompt]
+        prompts.append(p)
+        r = row.get("model_patch") or ""
+        if max_resp and len(r) > max_resp:
+            r = r[:max_resp]
+        responses.append(r)
         instance_ids.append(row.get("instance_id", ""))
         run_names.append(row.get("run_name", ""))
 

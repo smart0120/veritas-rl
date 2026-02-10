@@ -102,7 +102,7 @@ python data_processing/convert_swe_synth_sft.py \
   --output-dir train/parquet --val-ratio 0.1
 ```
 
-Then set `SFT_TRAIN_FILES=train/parquet/swe_synth_sft_train.parquet`, `SFT_VAL_FILES=train/parquet/swe_synth_sft_val.parquet`, `SFT_PROMPT_KEY=prompt`, `SFT_RESPONSE_KEY=response` and run the SFT script as usual.
+Then set `SFT_TRAIN_FILES=train/parquet/swe_synth_sft_train.parquet`, `SFT_VAL_FILES=train/parquet/swe_synth_sft_val.parquet`, `SFT_PROMPT_KEY=prompt`, `SFT_RESPONSE_KEY=response` and run the SFT script as usual. The converter truncates prompt and response by character length (`--max-chars-prompt`, `--max-chars-response`; when invoked from the script, derived from `SFT_MAX_LENGTH`) so tokenized sequences stay under the model limit and the trainer does not hit tokenizer length warnings.
 
 ---
 

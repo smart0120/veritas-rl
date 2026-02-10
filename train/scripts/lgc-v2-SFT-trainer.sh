@@ -88,11 +88,16 @@ SFT_VAL_RATIO="${SFT_VAL_RATIO:-0.1}"
 if [ -n "$SFT_HF_DATASET" ]; then
     echo "Converting HuggingFace dataset: $SFT_HF_DATASET -> ${SFT_PARQUET_DIR}"
     mkdir -p "${PROJECT_ROOT}/${SFT_PARQUET_DIR}"
+    # Truncate by char length so tokenized length stays under model max (avoids tokenizer warning in verl)
+    _max_len="${SFT_MAX_LENGTH:-8192}"
+    _max_chars="$((_max_len * 4))"
     python "${PROJECT_ROOT}/data_processing/convert_swe_synth_sft.py" \
         --dataset "$SFT_HF_DATASET" \
         --split train \
         --output-dir "${PROJECT_ROOT}/${SFT_PARQUET_DIR}" \
-        --val-ratio "$SFT_VAL_RATIO"
+        --val-ratio "$SFT_VAL_RATIO" \
+        --max-chars-prompt "$_max_chars" \
+        --max-chars-response "$_max_chars"
     SFT_TRAIN_FILES="${SFT_PARQUET_DIR}/swe_synth_sft_train.parquet"
     if [ -f "${PROJECT_ROOT}/${SFT_PARQUET_DIR}/swe_synth_sft_val.parquet" ]; then
         SFT_VAL_FILES="${SFT_PARQUET_DIR}/swe_synth_sft_val.parquet"
